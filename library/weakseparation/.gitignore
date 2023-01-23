@@ -1,0 +1,5 @@
+build/
+dist/
+src/pycount.egg-info/
+.idea/
+__pycache__
