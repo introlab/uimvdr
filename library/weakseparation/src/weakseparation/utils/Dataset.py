@@ -8,9 +8,10 @@ from torch.utils.data import Dataset
 
 
 class SeclumonsDataset(Dataset):
-    def __init__(self, dir, train=True) -> None:
+    def __init__(self, dir, train=True, sample_rate=8000) -> None:
         super().__init__()
         self.dir = dir
+        self.sample_rate = sample_rate
         if train:
             self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
         else:
@@ -38,7 +39,6 @@ class SeclumonsDataset(Dataset):
             n_fft=1024,
             hop_length=256,
             power=None,
-            return_complex=True,
         )
 
 
@@ -48,12 +48,24 @@ class SeclumonsDataset(Dataset):
     def __getitem__(self, idx):
         wav_path = os.path.join(self.dir, self.paths_to_data[idx])
 
-        x, sample_rate = torchaudio.load(wav_path)
+
+        x = None
+        for mic in range(7):
+            wav_mic_path = re.sub("micro[0-9]",f"micro{mic}", wav_path)
+
+            single_mic, file_sample_rate = torchaudio.load(wav_mic_path)
+
+            if x is None:
+                x = single_mic
+            else:
+                x = torch.cat((x, single_mic), 0)
+
+        x = self.resample(x, file_sample_rate, self.sample_rate)
 
         X = self.transformation(x)
 
         # self.plot_spectrogram_from_spectrogram(X)
-        # self.plot_spectrogram_from_waveform(x, sample_rate)
+        self.plot_spectrogram_from_waveform(x, self.sample_rate)
         # self.plot_waveform(x, sample_rate)
         
         # Get label
@@ -62,6 +74,14 @@ class SeclumonsDataset(Dataset):
         label = self.labels[wavName]
         
         return X, label
+
+    @staticmethod
+    def resample(tensor, old_sample_rate, new_sample_rate):
+        effects = [
+            ["lowpass", f"{new_sample_rate // 2}"],
+            ["rate", f'{new_sample_rate}'],
+        ]
+        return torchaudio.sox_effects.apply_effects_tensor(tensor, old_sample_rate, effects=effects)[0]
 
     @staticmethod
     def plot_spectrogram_from_spectrogram(spectrogram, title="Spectrogram"):
@@ -113,6 +133,6 @@ class SeclumonsDataset(Dataset):
 
 
 if __name__ == '__main__':
-    dataset = SeclumonsDataset("/home/jacob/dev/weakseparation/library/dataset/SECL-UMONS")
+    dataset = SeclumonsDataset("/home/jacob/Dev/weakseparation/library/dataset/SECL-UMONS")
     print(len(dataset))
     print(next(iter(dataset)))
