@@ -3,25 +3,39 @@ import re
 import csv
 import torchaudio
 import torch
-import matplotlib.pyplot as plt
+
+from PlotUtils import *
 from torch.utils.data import Dataset
 
 
 class SeclumonsDataset(Dataset):
-    def __init__(self, dir, train=True, sample_rate=8000) -> None:
+    def __init__(self, dir, train=True, sample_rate=16000, max_sources=3, forceCPU=False) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
+        self.max_sources = max_sources
+
+        if forceCPU:
+            self.device = 'cpu'
+        else:
+            if (torch.cuda.is_available()):
+                self.device = 'cuda'
+            else:
+                self.device = 'cpu'
+
         if train:
             self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
         else:
             self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
 
         self.paths_to_data = []
+        self.idx_from_room1_to_room2 = 0
         with open(self.split, mode='r') as csv_file:
             csvreader = csv.reader(csv_file)
-            for row in csvreader:
+            for idx, row in enumerate(csvreader):
                 self.paths_to_data.append(row[0])
+                if re.search("room1", row[0]):
+                    self.idx_from_room1_to_room2 = idx
                 
         unilabelDataPath = os.path.join(dir,"Unilabel")
 
@@ -35,10 +49,11 @@ class SeclumonsDataset(Dataset):
                         for row in csvreader:
                             self.labels[row["File name"]] = row
 
-        self.transformation = torchaudio.transforms.Spectrogram(
-            n_fft=1024,
+        self.stft = torchaudio.transforms.Spectrogram(
+            n_fft=512,
             hop_length=256,
             power=None,
+            window_fn=self.sqrt_hann_window
         )
 
 
@@ -48,7 +63,75 @@ class SeclumonsDataset(Dataset):
     def __getitem__(self, idx):
         wav_path = os.path.join(self.dir, self.paths_to_data[idx])
 
+        # Get label
+        sample_labels = [self.labels[self.get_name_for_annotations(wav_path)]]
 
+        x, file_sample_rate = self.get_multi_channel(wav_path)
+
+        x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
+
+        x = self.get_right_number_of_samples(x, 3)
+
+        mix = self.stft(x)
+
+        isolated_sources = mix[None, ...]
+
+        additionnal_idxs = []
+        for _ in range(self.max_sources-1):
+            if torch.rand(1)[0] <= 0.5:
+                while True:
+                    if sample_labels[0]["room number"] == '1':
+                        additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2, size=(1,))[0].item()
+                    else:
+                        additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2, high=len(self)-1, size=(1,))[0].item()
+                    
+                    if additionnal_idx != idx or not additionnal_idx in additionnal_idxs:
+                        break
+                additionnal_idxs.append(additionnal_idx)
+
+        for idx in additionnal_idxs:
+            wav_path = os.path.join(self.dir, self.paths_to_data[idx])
+            additionnal_x, _ = self.get_multi_channel(wav_path)
+            additionnal_x = torchaudio.functional.resample(
+                additionnal_x,
+                orig_freq=file_sample_rate,
+                new_freq=self.sample_rate
+            ).to(self.device)
+            additionnal_x = self.get_right_number_of_samples(additionnal_x, 3)
+            additionnal_X = self.stft(additionnal_x)
+            isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
+            sample_labels.append(self.labels[self.get_name_for_annotations(wav_path)])
+            mix += additionnal_X
+
+
+        # plot_spectrogram_from_spectrogram(X.cpu())
+        # plot_spectrogram_from_waveform(x.cpu(), self.sample_rate)
+        # plot_waveform(x.cpu(), sample_rate)
+
+        # istft = torchaudio.transforms.InverseSpectrogram(
+        #         n_fft=512, hop_length=256, window_fn=self.sqrt_hann_window
+        #     )
+        # resampled_x = istft(mix)
+        # torchaudio.save(f'./test.wav', resampled_x.cpu(), self.sample_rate)
+        
+        return mix, isolated_sources, sample_labels
+
+
+    @staticmethod
+    def get_name_for_annotations(wav_path):
+        labelwavName = wav_path.split("/")[-1]
+        return re.sub("_micro[0-9]","", labelwavName)
+
+    def get_right_number_of_samples(self, x, seconds):
+        if x.shape[1] < seconds*self.sample_rate:
+            x = torch.nn.functional.pad(x, (0, seconds*self.sample_rate-x.shape[1]), mode="constant", value=0)
+        elif x.shape[1] > seconds*self.sample_rate:
+            x = x[:3*self.sample_rate-x.shape[1]]
+
+        return x
+
+    @staticmethod
+    def get_multi_channel(wav_path):
         x = None
         for mic in range(7):
             wav_mic_path = re.sub("micro[0-9]",f"micro{mic}", wav_path)
@@ -59,76 +142,18 @@ class SeclumonsDataset(Dataset):
                 x = single_mic
             else:
                 x = torch.cat((x, single_mic), 0)
-
-        x = self.resample(x, file_sample_rate, self.sample_rate)
-
-        X = self.transformation(x)
-
-        # self.plot_spectrogram_from_spectrogram(X)
-        self.plot_spectrogram_from_waveform(x, self.sample_rate)
-        # self.plot_waveform(x, sample_rate)
-        
-        # Get label
-        wavName = wav_path.split("/")[-1]
-        wavName = re.sub("_micro[0-9]","", wavName)
-        label = self.labels[wavName]
-        
-        return X, label
+        return x, file_sample_rate
 
     @staticmethod
-    def resample(tensor, old_sample_rate, new_sample_rate):
-        effects = [
-            ["lowpass", f"{new_sample_rate // 2}"],
-            ["rate", f'{new_sample_rate}'],
-        ]
-        return torchaudio.sox_effects.apply_effects_tensor(tensor, old_sample_rate, effects=effects)[0]
-
-    @staticmethod
-    def plot_spectrogram_from_spectrogram(spectrogram, title="Spectrogram"):
-        plt.figure(title)
-        plt.imshow(20*torch.abs(spectrogram).log10()[0,:,:].numpy(), origin='lower')
-        plt.colorbar()
-
-    @staticmethod
-    def plot_spectrogram_from_waveform(waveform, sample_rate, title="Spectrogram", xlim=None):
-        waveform = waveform.numpy()
-
-        num_channels, num_frames = waveform.shape
-        time_axis = torch.arange(0, num_frames) / sample_rate
-
-        figure, axes = plt.subplots(num_channels, 1)
-        if num_channels == 1:
-            axes = [axes]
-        for c in range(num_channels):
-            axes[c].specgram(waveform[c], Fs=sample_rate)
-            if num_channels > 1:
-                axes[c].set_ylabel(f'Channel {c+1}')
-            if xlim:
-                axes[c].set_xlim(xlim)
-        figure.suptitle(title)
-        plt.show()
-
-    @staticmethod
-    def plot_waveform(waveform, sample_rate, title="Waveform", xlim=None, ylim=None):
-        waveform = waveform.numpy()
-
-        num_channels, num_frames = waveform.shape
-        time_axis = torch.arange(0, num_frames) / sample_rate
-
-        figure, axes = plt.subplots(num_channels, 1)
-        if num_channels == 1:
-            axes = [axes]
-        for c in range(num_channels):
-            axes[c].plot(time_axis, waveform[c], linewidth=1)
-            axes[c].grid(True)
-            if num_channels > 1:
-                axes[c].set_ylabel(f'Channel {c+1}')
-            if xlim:
-                axes[c].set_xlim(xlim)
-            if ylim:
-                axes[c].set_ylim(ylim)
-        figure.suptitle(title)
-        plt.show()
+    # Forcing cuda for window device because it seems pytorch does not pass the device of the input :(
+    def sqrt_hann_window(
+        window_length, periodic=True, dtype=None, layout=torch.strided, device='cuda', requires_grad=False
+    ):
+        return torch.sqrt(
+            torch.hann_window(
+                window_length, periodic=periodic, dtype=dtype, layout=layout, device=device, requires_grad=requires_grad
+            )
+        )
         
 
 
