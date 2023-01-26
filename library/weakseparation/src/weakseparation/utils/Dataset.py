@@ -4,7 +4,7 @@ import csv
 import torchaudio
 import torch
 
-from PlotUtils import *
+from .PlotUtils import *
 from torch.utils.data import Dataset
 
 
@@ -14,6 +14,21 @@ class SeclumonsDataset(Dataset):
         self.dir = dir
         self.sample_rate = sample_rate
         self.max_sources = max_sources
+
+        self.class_to_id = {
+            "chair_movement": 0,
+            "cup_drop_off": 1,
+            "hand_clap": 2,
+            "keyboard": 3,
+            "knock": 4,
+            "phone_ring": 5,
+            "radio": 6,
+            "speaker": 7,
+            "step": 8,
+            "whistle": 9,
+            "furniture_drawer": 10,
+            "nothing": 11
+        }
 
         if forceCPU:
             self.device = 'cpu'
@@ -64,12 +79,14 @@ class SeclumonsDataset(Dataset):
         wav_path = os.path.join(self.dir, self.paths_to_data[idx])
 
         # Get label
-        sample_labels = [self.labels[self.get_name_for_annotations(wav_path)]]
+        initial_label = self.labels[self.get_name_for_annotations(wav_path)]
+        sample_labels = torch.tensor([int(self.labels[self.get_name_for_annotations(wav_path)]["class number"])], dtype=torch.int)
 
         x, file_sample_rate = self.get_multi_channel(wav_path)
 
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
 
+        # TODO: change number of seconds
         x = self.get_right_number_of_samples(x, 3)
 
         mix = self.stft(x)
@@ -80,7 +97,7 @@ class SeclumonsDataset(Dataset):
         for _ in range(self.max_sources-1):
             if torch.rand(1)[0] <= 0.5:
                 while True:
-                    if sample_labels[0]["room number"] == '1':
+                    if initial_label["room number"] == '1':
                         additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2, size=(1,))[0].item()
                     else:
                         additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2, high=len(self)-1, size=(1,))[0].item()
@@ -100,11 +117,20 @@ class SeclumonsDataset(Dataset):
             additionnal_x = self.get_right_number_of_samples(additionnal_x, 3)
             additionnal_X = self.stft(additionnal_x)
             isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
-            sample_labels.append(self.labels[self.get_name_for_annotations(wav_path)])
+            sample_labels = torch.cat(
+                (sample_labels,
+                torch.tensor([int(self.labels[self.get_name_for_annotations(wav_path)]["class number"])])))
             mix += additionnal_X
 
+        while isolated_sources.shape[0] < self.max_sources:
+            zeroes = torch.zeros_like(mix)
+            isolated_sources = torch.cat((isolated_sources, zeroes[None, ...]))
+            sample_labels = torch.cat((
+                sample_labels,
+                torch.tensor([self.class_to_id["nothing"]])))
 
-        # plot_spectrogram_from_spectrogram(X.cpu())
+
+        # plot_spectrogram_from_spectrogram(mix.cpu())
         # plot_spectrogram_from_waveform(x.cpu(), self.sample_rate)
         # plot_waveform(x.cpu(), sample_rate)
 
@@ -126,7 +152,7 @@ class SeclumonsDataset(Dataset):
         if x.shape[1] < seconds*self.sample_rate:
             x = torch.nn.functional.pad(x, (0, seconds*self.sample_rate-x.shape[1]), mode="constant", value=0)
         elif x.shape[1] > seconds*self.sample_rate:
-            x = x[:3*self.sample_rate-x.shape[1]]
+            x = x[..., :3*self.sample_rate-x.shape[1]]
 
         return x
 
@@ -147,7 +173,7 @@ class SeclumonsDataset(Dataset):
     @staticmethod
     # Forcing cuda for window device because it seems pytorch does not pass the device of the input :(
     def sqrt_hann_window(
-        window_length, periodic=True, dtype=None, layout=torch.strided, device='cuda', requires_grad=False
+        window_length, periodic=True, dtype=None, layout=torch.strided, device=None, requires_grad=False
     ):
         return torch.sqrt(
             torch.hann_window(

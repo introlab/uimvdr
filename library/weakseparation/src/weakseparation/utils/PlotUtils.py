@@ -5,6 +5,7 @@ def plot_spectrogram_from_spectrogram(spectrogram, title="Spectrogram"):
     plt.figure(title)
     plt.imshow(20*torch.abs(spectrogram).log10()[0,:,:].numpy(), origin='lower')
     plt.colorbar()
+    plt.show()
 
 
 def plot_spectrogram_from_waveform(waveform, sample_rate, title="Spectrogram", xlim=None):
