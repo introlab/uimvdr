@@ -5,30 +5,17 @@ import torchaudio
 import torch
 
 from .PlotUtils import *
+from .LabelUtils import class_to_id
+from .Windows import sqrt_hann_window
 from torch.utils.data import Dataset
 
 
 class SeclumonsDataset(Dataset):
-    def __init__(self, dir, train=True, sample_rate=16000, max_sources=3, forceCPU=False) -> None:
+    def __init__(self, dir, frame_size, hop_size, train=True, sample_rate=16000, max_sources=3, forceCPU=False) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
         self.max_sources = max_sources
-
-        self.class_to_id = {
-            "chair_movement": 0,
-            "cup_drop_off": 1,
-            "hand_clap": 2,
-            "keyboard": 3,
-            "knock": 4,
-            "phone_ring": 5,
-            "radio": 6,
-            "speaker": 7,
-            "step": 8,
-            "whistle": 9,
-            "furniture_drawer": 10,
-            "nothing": 11
-        }
 
         if forceCPU:
             self.device = 'cpu'
@@ -65,10 +52,10 @@ class SeclumonsDataset(Dataset):
                             self.labels[row["File name"]] = row
 
         self.stft = torchaudio.transforms.Spectrogram(
-            n_fft=512,
-            hop_length=256,
+            n_fft=frame_size,
+            hop_length=hop_size,
             power=None,
-            window_fn=self.sqrt_hann_window
+            window_fn=sqrt_hann_window
         )
 
 
@@ -95,7 +82,7 @@ class SeclumonsDataset(Dataset):
 
         additionnal_idxs = []
         for _ in range(self.max_sources-1):
-            if torch.rand(1)[0] <= 0.5:
+            if torch.rand(1)[0] <= 1:
                 while True:
                     if initial_label["room number"] == '1':
                         additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2, size=(1,))[0].item()
@@ -127,7 +114,7 @@ class SeclumonsDataset(Dataset):
             isolated_sources = torch.cat((isolated_sources, zeroes[None, ...]))
             sample_labels = torch.cat((
                 sample_labels,
-                torch.tensor([self.class_to_id["nothing"]])))
+                torch.tensor([class_to_id["nothing"]])))
 
 
         # plot_spectrogram_from_spectrogram(mix.cpu())
@@ -135,7 +122,7 @@ class SeclumonsDataset(Dataset):
         # plot_waveform(x.cpu(), sample_rate)
 
         # istft = torchaudio.transforms.InverseSpectrogram(
-        #         n_fft=512, hop_length=256, window_fn=self.sqrt_hann_window
+        #         n_fft=512, hop_length=256, window_fn=sqrt_hann_window
         #     )
         # resampled_x = istft(mix)
         # torchaudio.save(f'./test.wav', resampled_x.cpu(), self.sample_rate)
@@ -169,17 +156,6 @@ class SeclumonsDataset(Dataset):
             else:
                 x = torch.cat((x, single_mic), 0)
         return x, file_sample_rate
-
-    @staticmethod
-    # Forcing cuda for window device because it seems pytorch does not pass the device of the input :(
-    def sqrt_hann_window(
-        window_length, periodic=True, dtype=None, layout=torch.strided, device=None, requires_grad=False
-    ):
-        return torch.sqrt(
-            torch.hann_window(
-                window_length, periodic=periodic, dtype=dtype, layout=layout, device=device, requires_grad=requires_grad
-            )
-        )
         
 
 

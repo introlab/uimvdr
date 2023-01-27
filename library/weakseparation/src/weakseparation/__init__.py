@@ -1,2 +1,2 @@
-from .models.RNN import *
+from .models import *
 from .utils import *
