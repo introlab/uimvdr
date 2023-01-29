@@ -1,2 +1,4 @@
 library/dataset/SECL-UMONS
 lightning_logs/
+wandb/
+mc-weak-separation/

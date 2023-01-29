@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 
 
 class SeclumonsDataset(Dataset):
-    def __init__(self, dir, frame_size, hop_size, train=True, sample_rate=16000, max_sources=3, forceCPU=False) -> None:
+    def __init__(self, dir, frame_size, hop_size, type="train", sample_rate=16000, max_sources=3, forceCPU=False) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
@@ -25,10 +25,14 @@ class SeclumonsDataset(Dataset):
             else:
                 self.device = 'cpu'
 
-        if train:
+        if type == "train":
             self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
-        else:
+        elif type == "val":
             self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
+        elif type == "predict":
+            self.split = os.path.join(self.dir, "unilabel_split1_predict.csv")
+        else:
+            raise RuntimeError("Unknown dataset type")
 
         self.paths_to_data = []
         self.idx_from_room1_to_room2 = 0
@@ -82,7 +86,7 @@ class SeclumonsDataset(Dataset):
 
         additionnal_idxs = []
         for _ in range(self.max_sources-1):
-            if torch.rand(1)[0] <= 1:
+            if torch.rand(1)[0] <= 0.5:
                 while True:
                     if initial_label["room number"] == '1':
                         additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2, size=(1,))[0].item()

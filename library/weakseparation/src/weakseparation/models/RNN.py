@@ -1,9 +1,10 @@
 import torch
 from torch import optim, nn
-from torchmetrics.functional import permutation_invariant_training
+from torchmetrics.functional import permutation_invariant_training, pit_permutate
 from torchmetrics.functional.audio import scale_invariant_signal_noise_ratio
 from torchaudio.transforms import InverseSpectrogram
 import pytorch_lightning as pl
+import wandb
 
 from ..utils.Windows import cuda_sqrt_hann_window
 
@@ -85,14 +86,18 @@ class GRU(pl.LightningModule):
         pit_loss, best_permutation = permutation_invariant_training(
             torch.abs(pred),
             torch.abs(isolatedSources),
-            nn.functional.mse_loss,
+            self.custom_mse,
             eval_func = "min"
         )
 
-        # pred = self.reorder_source(isolatedSources, best_permutation)
+        pred = pit_permutate(pred, best_permutation)
+
+        snr = scale_invariant_signal_noise_ratio(self.istft(pred), self.istft(isolatedSources)).mean()
         loss = pit_loss.sum()
 
         self.log("train_loss", loss)
+        self.log('train_SI-SNR', snr)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -102,17 +107,35 @@ class GRU(pl.LightningModule):
 
         pred = torch.einsum("iklm,ijklm->ijklm", mix, masks)
 
+        # pit_loss, best_permutation = permutation_invariant_training(
+        #     self.istft(pred)[:,:,0],
+        #     self.istft(isolatedSources)[:,:,0],
+        #     scale_invariant_signal_noise_ratio,
+        #     eval_func = "max",
+        # )
+        # Need custom MSE to get the mse for each sample of the batch
         pit_loss, best_permutation = permutation_invariant_training(
             torch.abs(pred),
             torch.abs(isolatedSources),
-            nn.functional.mse_loss,
-            eval_func = "min"
+            self.custom_mse,
+            eval_func = "min",
         )
 
-        # pred = self.reorder_source(isolatedSources, best_permutation)
+        pred = pit_permutate(pred, best_permutation)
+
+        snr = scale_invariant_signal_noise_ratio(self.istft(pred), self.istft(isolatedSources)).mean()
+
         loss = pit_loss.sum()
 
         self.log('val_loss', loss)
+        self.log('val_SI-SNR', snr)
+
+        return loss
+
+    @staticmethod
+    def custom_mse(pred, target):
+        loss = nn.functional.mse_loss(pred, target, reduction="none")
+        loss = loss.mean((1,2,3))
         return loss
 
     def predict_step(self, batch, batch_idx):
@@ -122,24 +145,7 @@ class GRU(pl.LightningModule):
 
         pred = torch.einsum("iklm,ijklm->ijklm", mix, masks)
 
-        return pred 
-
-    #Taken from Asteroid
-    @staticmethod
-    def reorder_source(source, batch_indices):
-        """ Reorder sources according to the best permutation.
-        Args:
-            source (torch.Tensor): Tensor of shape [batch, n_src, time]
-            batch_indices (torch.Tensor): Tensor of shape [batch, n_src].
-                Contains optimal permutation indices for each batch.
-        Returns:
-            :class:`torch.Tensor`:
-                Reordered sources of shape [batch, n_src, time].
-        """
-        reordered_sources = torch.stack(
-            [torch.index_select(s, 0, b) for s, b in zip(source, batch_indices)]
-        )
-        return reordered_sources
+        return pred, isolatedSources, labels
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=1e-3)

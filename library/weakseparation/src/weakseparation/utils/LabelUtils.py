@@ -1,14 +1,3 @@
-class_to_id = {
-    "chair_movement": 0,
-    "cup_drop_off": 1,
-    "hand_clap": 2,
-    "keyboard": 3,
-    "knock": 4,
-    "phone_ring": 5,
-    "radio": 6,
-    "speaker": 7,
-    "step": 8,
-    "whistle": 9,
-    "furniture_drawer": 10,
-    "nothing": 11
-}
+letter_array = ["chair_movement", "cup_drop_off", "hand_clap", "keyboard", "knock", "phone_ring", "radio", "speaker", "step", "whistle", "furniture_drawer", "nothing"]
+class_to_id = {v: k for k, v in enumerate(letter_array)}
+id_to_class = {k: v for k, v in enumerate(letter_array)}
