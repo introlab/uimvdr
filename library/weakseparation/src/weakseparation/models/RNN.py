@@ -7,6 +7,8 @@ import pytorch_lightning as pl
 import wandb
 
 from ..utils.Windows import cuda_sqrt_hann_window
+from ..utils.LabelUtils import id_to_class
+from ..utils.PlotUtils import plot_spectrogram_from_waveform
 
 import warnings
 warnings.filterwarnings("ignore", message="Starting from v1.9.0, `tensorboardX` has been removed as ")
@@ -18,12 +20,14 @@ class GRU(pl.LightningModule):
         self.mics = mics
         self.BN = nn.BatchNorm2d(num_features=mics)
         self.GRU = nn.GRU(input_size, hidden_size, num_layers, batch_first=True, bidirectional=False, dropout=0)
-        self.linear = nn.Linear(hidden_size, input_size) # self.fc = nn.Conv2d(in_channels=hidden_size, out_channels=input_size, kernel_size=1) 
-        self.conv_sources = nn.Conv2d(in_channels=1, out_channels=3, kernel_size=(3,3), padding=1)
+        self.linear = nn.Linear(hidden_size, hidden_size) # self.fc = nn.Conv2d(in_channels=hidden_size, out_channels=input_size, kernel_size=1) 
         self.sig = nn.Sigmoid()
         self.istft = InverseSpectrogram(
                 n_fft=512, hop_length=256, window_fn=cuda_sqrt_hann_window
             )
+        
+        self.log_columns = ["class", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
+        self.epsilon = 1e-6
 
         self.save_hyperparameters()
 
@@ -48,19 +52,13 @@ class GRU(pl.LightningModule):
         # N x T x F*M > N x T x H
         x, h = self.GRU(x, hidden)
 
-        # N x T x H > N x H x T
-        x = x.permute(0, 2, 1)
+        # N x T x H  > N x T x H
+        x = nn.functional.relu(x)
 
-        # N x H x T > N x H x T x 1
-        x = torch.unsqueeze(x, 3)
+        # N x T x H  > N x 1 x T x H
+        x = x[:,None,...]
 
-        # N x H x T x 1 > N x 1 x T x H
-        x = x.permute(0, 3, 2, 1)
-
-        # N x 1 x T x H > N x S x T x H
-        x = self.conv_sources(x)
-
-        # N x S x T x H > N x S x T x F*M
+        # N x 1 x T x H > N x 1 x T x H (H=F*2)
         x = self.linear(x)
 
         #TODO: put nb of sources in variable
@@ -78,6 +76,9 @@ class GRU(pl.LightningModule):
                 isolated sources (batch_num, sources, mics, freq, frame)
         """
         mix, isolatedSources, labels = batch
+
+        mix = mix[:,0][:, None, ...]
+        isolatedSources = isolatedSources[:,:,0][:, :, None, ...]
 
         masks, h = self(mix)
 
@@ -103,6 +104,9 @@ class GRU(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         mix, isolatedSources, labels  = batch
 
+        mix = mix[:,0][:, None, ...]
+        isolatedSources = isolatedSources[:,:,0][:, :, None, ...]
+
         masks, h = self(mix)
 
         pred = torch.einsum("iklm,ijklm->ijklm", mix, masks)
@@ -126,6 +130,26 @@ class GRU(pl.LightningModule):
         snr = scale_invariant_signal_noise_ratio(self.istft(pred), self.istft(isolatedSources)).mean()
 
         loss = pit_loss.sum()
+
+        if not self.current_epoch % 49 and batch_idx == 0 and self.logger is not None:
+            preds = pred[0,:,0]
+            groundTruths = isolatedSources[0,:,0]
+            label = labels[0]
+            i = 0
+            table = []
+            for source, groundTruth, id in zip(preds, groundTruths, label):
+                waveform_source = self.istft(source)
+                waveform_groundTruth = self.istft(groundTruth)
+                class_label = id_to_class[id.item()]
+                table.append([
+                    class_label,
+                    wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title=class_label)),
+                    wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title=class_label)),
+                    wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
+                    wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                    ])
+                i+=1
+            self.logger.log_table(key="results", columns=self.log_columns, data=table)
 
         self.log('val_loss', loss)
         self.log('val_SI-SNR', snr)

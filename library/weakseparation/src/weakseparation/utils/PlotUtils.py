@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
@@ -7,7 +10,7 @@ def plot_spectrogram_from_spectrogram(spectrogram, title="Spectrogram", show = F
     fig, ax = plt.subplots()
     fig.suptitle(title)
     # show image
-    shw = ax.imshow(20*torch.abs(spectrogram).log10()[:,:].cpu().numpy(), origin='lower')
+    shw = ax.imshow(10*torch.abs(spectrogram).log10()[:,:].cpu().numpy(), origin='lower')
     
     # make bar
     plt.colorbar(shw)
@@ -43,7 +46,9 @@ def plot_spectrogram_from_waveform(waveform, sample_rate, title="Spectrogram", s
     if show:
         plt.show()
     else:
+        plt.ioff()
         figure.canvas.draw()
+        plt.close()
     
     data = np.frombuffer(figure.canvas.tostring_rgb(), dtype=np.uint8)
     data = data.reshape(figure.canvas.get_width_height()[::-1] + (3,))

@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from .Dataset import SeclumonsDataset
 
 class SeclumonsDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir, batch_size, frame_size, hop_size, sample_rate=16000, num_of_workers=4):
+    def __init__(self, data_dir, batch_size, frame_size, hop_size, sample_rate=16000, max_sources=3, num_of_workers=4):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
@@ -12,19 +12,52 @@ class SeclumonsDataModule(pl.LightningDataModule):
         self.sample_rate = sample_rate
         self.frame_size = frame_size
         self.hop_size = hop_size
+        self.max_sources = max_sources
 
     def setup(self, stage: str):
 
         # Assign test dataset for use in dataloader(s)
         if stage == "fit":
-            self.seclumons_train = SeclumonsDataset(self.data_dir, self.frame_size, self.hop_size, type="train", sample_rate=self.sample_rate, forceCPU=True)
-            self.seclumons_val = SeclumonsDataset(self.data_dir, self.frame_size, self.hop_size, type="val", sample_rate=self.sample_rate, forceCPU=True)
+            self.seclumons_train = SeclumonsDataset(
+                self.data_dir,
+                self.frame_size,
+                self.hop_size,
+                type="train",
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources, 
+                forceCPU=True
+            )
+            self.seclumons_val = SeclumonsDataset(
+                self.data_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                type="val", 
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources, 
+                forceCPU=True
+            )
 
         if stage == "validate":
-            self.seclumons_val = SeclumonsDataset(self.data_dir, self.frame_size, self.hop_size, type="val", sample_rate=self.sample_rate, forceCPU=True)
+            self.seclumons_val = SeclumonsDataset(
+                self.data_dir,
+                self.frame_size,
+                self.hop_size,
+                type="val",
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                forceCPU=True
+            )
 
         if stage == "predict":
-            self.seclumons_val = SeclumonsDataset(self.data_dir, self.frame_size, self.hop_size, type="predict", sample_rate=self.sample_rate, forceCPU=True)
+            self.seclumons_val = SeclumonsDataset(
+                self.data_dir,
+                self.frame_size,
+                self.hop_size,
+                type="predict",
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                forceCPU=True
+            )
 
     def train_dataloader(self):
         return DataLoader(

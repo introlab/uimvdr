@@ -13,10 +13,18 @@ seed = 42
 frame_size = 512
 bins = int(frame_size / 2) + 1
 hop_size = 256
-mics = 7
+mics = 1
+max_sources = 3
 layers = 2
-hidden_dim = 128
-epochs = 5
+hidden_dim = bins*max_sources
+epochs = 200
+batch_size=8
+num_of_workers=8
+
+if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
+    batch_size=32
+    num_of_workers=16
+    torch.set_float32_matmul_precision('high')
 
 def main(args):
 
@@ -33,12 +41,13 @@ def main(args):
         wandb_logger = None
 
     dm = weakseparation.SeclumonsDataModule(
-        "/home/jacob/Dev/weakseparation/library/dataset/SECL-UMONS",
+        "/home/jacob/dev/weakseparation/library/dataset/SECL-UMONS",
         frame_size = frame_size,
         hop_size = hop_size,
         sample_rate=sample_rate,
-        batch_size=8,
-        num_of_workers=8
+        max_sources=max_sources,
+        batch_size=batch_size,
+        num_of_workers=num_of_workers
     )
 
     model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics)
@@ -48,38 +57,12 @@ def main(args):
         accelerator='gpu',
         devices=1,
         callbacks=[checkpoint_callback],
-        logger=wandb_logger
+        logger=wandb_logger,
+        log_every_n_steps=1
     )
 
     if args.train:
         trainer.fit(model=model, datamodule=dm)
-
-        if args.log:
-            columns = ["class", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
-
-            results = trainer.predict(model=model, datamodule=dm)
-            preds = results[0][0][0,:,0]
-            groundTruths = results[0][1][0,:,0]
-            labels = results[0][2][0]
-            istft = torchaudio.transforms.InverseSpectrogram(
-                    n_fft=frame_size, hop_length=hop_size, window_fn=weakseparation.sqrt_hann_window
-                )
-            i = 0
-            table = []
-            gain = 10
-            for source, groundTruth, label in zip(preds, groundTruths, labels):
-                waveform_source = istft(source)*gain
-                waveform_groundTruth = istft(groundTruth)*gain
-                class_label = weakseparation.id_to_class[label.item()]
-                table.append([
-                    class_label,
-                    wandb.Image(weakseparation.plot_spectrogram_from_waveform(waveform_source[None, ...], sample_rate, title=class_label)),
-                    wandb.Image(weakseparation.plot_spectrogram_from_waveform(waveform_groundTruth[None, ...], sample_rate, title=class_label)),
-                    wandb.Audio(waveform_source.cpu().numpy(), sample_rate=sample_rate),
-                    wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=sample_rate),
-                    ])
-                i+=1
-            wandb_logger.log_table(key="results", columns=columns, data=table)
 
     if args.predict:
         predictions = trainer.predict(model=model, datamodule=dm)
@@ -93,8 +76,8 @@ def main(args):
             torchaudio.save(f'./output{i}.wav', waveform, sample_rate)
             i+=1
 
-    # if args.log:
-    #     wandb_logger.finalize("success")
+    if args.log:
+        wandb.join()
 
 
 

@@ -16,6 +16,7 @@ class SeclumonsDataset(Dataset):
         self.dir = dir
         self.sample_rate = sample_rate
         self.max_sources = max_sources
+        self.gain = 10
 
         if forceCPU:
             self.device = 'cpu'
@@ -26,9 +27,11 @@ class SeclumonsDataset(Dataset):
                 self.device = 'cpu'
 
         if type == "train":
-            self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
+            #self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_overfit.csv")
         elif type == "val":
-            self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
+            #self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_overfit.csv")
         elif type == "predict":
             self.split = os.path.join(self.dir, "unilabel_split1_predict.csv")
         else:
@@ -86,14 +89,15 @@ class SeclumonsDataset(Dataset):
 
         additionnal_idxs = []
         for _ in range(self.max_sources-1):
-            if torch.rand(1)[0] <= 0.5:
+            # TODO: set the probability to 0.5
+            if torch.rand(1)[0] <= 1:
                 while True:
                     if initial_label["room number"] == '1':
-                        additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2, size=(1,))[0].item()
+                        additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2+1, size=(1,))[0].item()
                     else:
-                        additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2, high=len(self)-1, size=(1,))[0].item()
+                        additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2+1, high=len(self)-1, size=(1,))[0].item()
                     
-                    if additionnal_idx != idx or not additionnal_idx in additionnal_idxs:
+                    if additionnal_idx != idx and not additionnal_idx in additionnal_idxs:
                         break
                 additionnal_idxs.append(additionnal_idx)
 
@@ -147,8 +151,7 @@ class SeclumonsDataset(Dataset):
 
         return x
 
-    @staticmethod
-    def get_multi_channel(wav_path):
+    def get_multi_channel(self, wav_path):
         x = None
         for mic in range(7):
             wav_mic_path = re.sub("micro[0-9]",f"micro{mic}", wav_path)
@@ -159,7 +162,7 @@ class SeclumonsDataset(Dataset):
                 x = single_mic
             else:
                 x = torch.cat((x, single_mic), 0)
-        return x, file_sample_rate
+        return x*self.gain, file_sample_rate
         
 
 
