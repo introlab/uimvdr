@@ -1,7 +1,7 @@
 import torch
 from torch import optim, nn
 from torchmetrics.functional import permutation_invariant_training, pit_permutate
-from torchmetrics.functional.audio import scale_invariant_signal_noise_ratio
+from torchmetrics.functional.audio import signal_noise_ratio, scale_invariant_signal_distortion_ratio
 from torchaudio.transforms import InverseSpectrogram
 import pytorch_lightning as pl
 import wandb
@@ -27,7 +27,7 @@ class GRU(pl.LightningModule):
             )
         
         self.log_columns = ["class", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
-        self.epsilon = 1e-6
+        self.epsilon = torch.finfo(torch.float).eps
 
         self.save_hyperparameters()
 
@@ -62,7 +62,7 @@ class GRU(pl.LightningModule):
         x = self.linear(x)
 
         #TODO: put nb of sources in variable
-        x = torch.reshape(x, (original_shape[0], 3, original_shape[1], original_shape[2], original_shape[3]))
+        x = torch.reshape(x, (original_shape[0], 2, original_shape[1], original_shape[2], original_shape[3]))
         
         # N x S x M x F x T > N x S x M x F x T 
         x = self.sig(x)
@@ -85,19 +85,32 @@ class GRU(pl.LightningModule):
         pred = torch.einsum("iklm,ijklm->ijklm", mix, masks)
 
         pit_loss, best_permutation = permutation_invariant_training(
-            torch.abs(pred),
-            torch.abs(isolatedSources),
-            self.custom_mse,
-            eval_func = "min"
+            self.istft(pred)[:,:,0],
+            self.istft(isolatedSources)[:,:,0],
+            scale_invariant_signal_distortion_ratio,
+            eval_func = "max",
         )
+        # pit_loss, best_permutation = permutation_invariant_training(
+        #     pred,
+        #     isolatedSources,
+        #     self.custom_mse,
+        #     eval_func = "min"
+        # )
 
         pred = pit_permutate(pred, best_permutation)
 
-        snr = scale_invariant_signal_noise_ratio(self.istft(pred), self.istft(isolatedSources)).mean()
-        loss = pit_loss.sum()
+        pred_waveform = self.istft(pred)
+        pred_isolatedSources = self.istft(isolatedSources)
+
+        # Pytorch si-snr is si-sdr
+        snr = signal_noise_ratio(pred_waveform, pred_isolatedSources).mean()
+        sdr = scale_invariant_signal_distortion_ratio(pred_waveform, pred_isolatedSources).mean()
+        # loss = pit_loss.sum()
+        loss = pit_loss.mean()
 
         self.log("train_loss", loss)
-        self.log('train_SI-SNR', snr)
+        self.log('train_SNR', snr)
+        self.log('train_SI-SDR', sdr)
 
         return loss
 
@@ -111,25 +124,31 @@ class GRU(pl.LightningModule):
 
         pred = torch.einsum("iklm,ijklm->ijklm", mix, masks)
 
-        # pit_loss, best_permutation = permutation_invariant_training(
-        #     self.istft(pred)[:,:,0],
-        #     self.istft(isolatedSources)[:,:,0],
-        #     scale_invariant_signal_noise_ratio,
-        #     eval_func = "max",
-        # )
-        # Need custom MSE to get the mse for each sample of the batch
         pit_loss, best_permutation = permutation_invariant_training(
-            torch.abs(pred),
-            torch.abs(isolatedSources),
-            self.custom_mse,
-            eval_func = "min",
+            self.istft(pred)[:,:,0],
+            self.istft(isolatedSources)[:,:,0],
+            scale_invariant_signal_distortion_ratio,
+            eval_func = "max",
         )
+        # Need custom MSE to get the mse for each sample of the batch
+        # pit_loss, best_permutation = permutation_invariant_training(
+        #     pred,
+        #     isolatedSources,
+        #     self.custom_mse,
+        #     eval_func = "min",
+        # )
 
         pred = pit_permutate(pred, best_permutation)
 
-        snr = scale_invariant_signal_noise_ratio(self.istft(pred), self.istft(isolatedSources)).mean()
+        pred_waveform = self.istft(pred)
+        pred_isolatedSources = self.istft(isolatedSources)
 
-        loss = pit_loss.sum()
+        # Pytorch si-snr is si-sdr
+        snr = signal_noise_ratio(pred_waveform, pred_isolatedSources).mean()
+        sdr = scale_invariant_signal_distortion_ratio(pred_waveform, pred_isolatedSources).mean()
+
+        # loss = pit_loss.sum()
+        loss = pit_loss.mean()
 
         if not self.current_epoch % 49 and batch_idx == 0 and self.logger is not None:
             preds = pred[0,:,0]
@@ -151,14 +170,17 @@ class GRU(pl.LightningModule):
                 i+=1
             self.logger.log_table(key="results", columns=self.log_columns, data=table)
 
+
         self.log('val_loss', loss)
-        self.log('val_SI-SNR', snr)
+        self.log('val_SNR', snr)
+        self.log('val_SI-SDR', sdr)
 
         return loss
 
     @staticmethod
     def custom_mse(pred, target):
-        loss = nn.functional.mse_loss(pred, target, reduction="none")
+        phase_sensitive_target = torch.abs(target) * torch.cos(torch.angle(target) - torch.angle(pred))
+        loss = nn.functional.mse_loss(torch.abs(pred), phase_sensitive_target, reduction="none")
         loss = loss.mean((1,2,3))
         return loss
 
@@ -172,5 +194,5 @@ class GRU(pl.LightningModule):
         return pred, isolatedSources, labels
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = optim.Adam(self.parameters(), lr=1e-3, maximize=True)
         return optimizer

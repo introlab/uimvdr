@@ -14,7 +14,7 @@ frame_size = 512
 bins = int(frame_size / 2) + 1
 hop_size = 256
 mics = 1
-max_sources = 3
+max_sources = 2
 layers = 2
 hidden_dim = bins*max_sources
 epochs = 200
@@ -41,7 +41,7 @@ def main(args):
         wandb_logger = None
 
     dm = weakseparation.SeclumonsDataModule(
-        "/home/jacob/dev/weakseparation/library/dataset/SECL-UMONS",
+        "/home/jacob/Dev/weakseparation/library/dataset/SECL-UMONS",
         frame_size = frame_size,
         hop_size = hop_size,
         sample_rate=sample_rate,
