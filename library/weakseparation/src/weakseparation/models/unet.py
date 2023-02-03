@@ -14,15 +14,11 @@ import warnings
 warnings.filterwarnings("ignore", message="Starting from v1.9.0, `tensorboardX` has been removed as ")
 
 
-class GRU(pl.LightningModule):
-    def __init__(self, input_size, hidden_size, num_layers, mics, sources):
+class UNet(pl.LightningModule):
+    def __init__(self, in_channels, sources, mics):
         super().__init__()
         self.mics = mics
         self.sources = sources
-        self.BN = nn.BatchNorm2d(num_features=mics)
-        self.GRU = nn.GRU(input_size, hidden_size, num_layers, batch_first=True, bidirectional=False, dropout=0)
-        self.linear = nn.Linear(hidden_size, hidden_size) # self.fc = nn.Conv2d(in_channels=hidden_size, out_channels=input_size, kernel_size=1) 
-        self.sig = nn.Sigmoid()
         self.istft = InverseSpectrogram(
                 n_fft=512, hop_length=256, window_fn=cuda_sqrt_hann_window
             )
@@ -30,44 +26,94 @@ class GRU(pl.LightningModule):
         self.log_columns = ["class", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
         self.epsilon = torch.finfo(torch.float).eps
 
+        dim1 = 32
+        dim2 = 64
+        dim3 = 128
+        dim4 = 256
+        self.n_classes = sources
+
+        self.down1 = nn.Sequential(
+            nn.Conv2d(2*mics-1, dim1, (3, 3), padding=1),
+            nn.BatchNorm2d(dim1),
+            nn.ReLU(),
+            nn.Conv2d(dim1, dim1, (3, 3), padding=1),
+            nn.BatchNorm2d(dim1),
+            nn.ReLU()
+        )
+        self.down2 = nn.Sequential(
+            nn.MaxPool2d((2, 2), stride=2),
+            nn.Conv2d(dim1, dim2, (3, 3), padding=1),
+            nn.BatchNorm2d(dim2),
+            nn.ReLU(),
+            nn.Conv2d(dim2, dim2, (3, 3), padding=1),
+            nn.BatchNorm2d(dim2),
+            nn.ReLU(),
+        )
+        self.down3 = nn.Sequential(
+            nn.MaxPool2d((2, 2), 2),
+            nn.Conv2d(dim2, dim3, (3, 3), padding=1),
+            nn.BatchNorm2d(dim3),
+            nn.ReLU(),
+            nn.Conv2d(dim3, dim3, (3, 3), padding=1),
+            nn.BatchNorm2d(dim3),
+            nn.ReLU(),
+        )
+        self.bottleneck = nn.Sequential(
+            nn.MaxPool2d((2, 2), 2),
+            nn.Conv2d(dim3, dim4, (3, 3), padding=1),
+            nn.BatchNorm2d(dim4),
+            nn.ReLU(),
+            nn.Conv2d(dim4, dim3, (3, 3), padding=1),
+            nn.BatchNorm2d(dim3),
+            nn.ReLU(),
+            nn.ConvTranspose2d(dim3, dim3, (2, 2), stride=(2, 2), output_padding=(0,1)),
+        )
+
+        self.up3 = nn.Sequential(
+            nn.Conv2d(dim3 + dim3, dim3, (3, 3), padding=1),
+            nn.BatchNorm2d(dim3),
+            nn.ReLU(),
+            nn.Conv2d(dim3, dim2, (3, 3), padding=1),
+            nn.BatchNorm2d(dim2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(dim2, dim2, (2, 2), stride=(2, 2)),
+        )
+        self.up2 = nn.Sequential(
+            nn.Conv2d(dim2+dim2, dim2, (3, 3), padding=1),
+            nn.BatchNorm2d(dim2),
+            nn.ReLU(),
+            nn.Conv2d(dim2, dim1, (3, 3), padding=1),
+            nn.BatchNorm2d(dim1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(dim1, dim1, (2, 2), stride=(2, 2), output_padding=(1,0)),
+        )
+        self.up1 = nn.Sequential(
+            nn.Conv2d(dim1+dim1, dim1, (3, 3), padding=1),
+            nn.BatchNorm2d(dim1),
+            nn.ReLU(),
+            nn.Conv2d(dim1, dim1, (3, 3), padding=1),
+            nn.BatchNorm2d(dim1),
+            nn.ReLU(),
+            nn.Conv2d(dim1, self.n_classes, (3, 3), padding=1),
+        )
+
         self.save_hyperparameters()
 
-    def forward(self, x, hidden=None):
+    def forward(self, x):
+        x = torch.real(x)
+        down1 = self.down1(x)
+        down2 = self.down2(down1)
+        down3 = self.down3(down2)
+        bottleneck = self.bottleneck(down3)
+        concat1 = torch.cat((bottleneck, down3), dim=1)
+        up3 = self.up3(concat1)
+        concat2 = torch.cat((up3, down2), dim=1)
+        up2 = self.up2(concat2)
+        concat3 = torch.cat((up2, down1), dim=1)
+        output = self.up1(concat3)
+        output = torch.sigmoid(output)
 
-        original_shape = x.shape
-        # N x M x F x T > N x M x F x T
-        x = torch.abs(x)
-
-        # N x M x F x T > N x M x T x F
-        x = x.permute(0, 1, 3, 2)
-
-        # N x M x T x F > N x M x T x F
-        x = self.BN(x)
-
-        # N x M x F x T > N x T x F x M
-        x = x.permute(0, 2, 3, 1)
-
-        # N x T x F x M > N x T x F*M
-        x = torch.reshape(x, (x.shape[0], x.shape[1], x.shape[2] * x.shape[3]))
-
-        # N x T x F*M > N x T x H
-        x, h = self.GRU(x, hidden)
-
-        # N x T x H  > N x T x H
-        x = nn.functional.relu(x)
-
-        # N x T x H  > N x 1 x T x H
-        x = x[:,None,...]
-
-        # N x 1 x T x H > N x 1 x T x H (H=F*2)
-        x = self.linear(x)
-
-        #TODO: put nb of sources in variable
-        x = torch.reshape(x, (original_shape[0], self.sources, original_shape[1], original_shape[2], original_shape[3]))
-        
-        # N x S x M x F x T > N x S x M x F x T 
-        x = self.sig(x)
-        return x, h
+        return output
 
     def training_step(self, batch, batch_idx):
         """
@@ -78,16 +124,22 @@ class GRU(pl.LightningModule):
         """
         mix, isolatedSources, labels = batch
 
-        mix = mix[:,0][:, None, ...]
-        isolatedSources = isolatedSources[:,:,0][:, :, None, ...]
+        isolatedSources = isolatedSources[:,:,0]
 
-        masks, h = self(mix)
+        input = torch.abs(mix).median(dim=1, keepdim=True).values
+        phases = torch.angle(mix)
 
-        pred = torch.einsum("iklm,ijklm->ijklm", mix, masks)
+        for mic in range(1, self.mics):
+            input = torch.cat((input, torch.cos(phases[:, 0] - phases[:, mic])[:, None, ...]), dim=1)
+            input = torch.cat((input, torch.sin(phases[:, 0] - phases[:, mic])[:, None, ...]), dim=1)
+
+        masks= self(input)
+
+        pred = mix[:, 0][:, None, ...] * masks
 
         pit_loss, best_permutation = permutation_invariant_training(
-            self.istft(pred)[:,:,0],
-            self.istft(isolatedSources)[:,:,0],
+            self.istft(pred),
+            self.istft(isolatedSources),
             scale_invariant_signal_distortion_ratio,
             eval_func = "max",
         )
@@ -118,16 +170,22 @@ class GRU(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         mix, isolatedSources, labels  = batch
 
-        mix = mix[:,0][:, None, ...]
-        isolatedSources = isolatedSources[:,:,0][:, :, None, ...]
+        isolatedSources = isolatedSources[:,:,0]
 
-        masks, h = self(mix)
+        input = torch.real(mix).median(dim=1, keepdim=True).values
+        phases = torch.angle(mix)
 
-        pred = torch.einsum("iklm,ijklm->ijklm", mix, masks)
+        for mic in range(1, self.mics):
+            input = torch.cat((input, torch.cos(phases[:, 0] - phases[:, mic])[:, None, ...]), dim=1)
+            input = torch.cat((input, torch.sin(phases[:, 0] - phases[:, mic])[:, None, ...]), dim=1)
+
+        masks= self(input)
+
+        pred = mix[:, 0][:, None, ...] * masks
 
         pit_loss, best_permutation = permutation_invariant_training(
-            self.istft(pred)[:,:,0],
-            self.istft(isolatedSources)[:,:,0],
+            self.istft(pred),
+            self.istft(isolatedSources),
             scale_invariant_signal_distortion_ratio,
             eval_func = "max",
         )
@@ -152,8 +210,8 @@ class GRU(pl.LightningModule):
         loss = pit_loss.mean()
 
         if not self.current_epoch % 49 and batch_idx == 0 and self.logger is not None:
-            preds = pred[0,:,0]
-            groundTruths = isolatedSources[0,:,0]
+            preds = pred[0]
+            groundTruths = isolatedSources[0]
             label = labels[0]
             i = 0
             table = []
@@ -167,7 +225,7 @@ class GRU(pl.LightningModule):
                     wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title=class_label)),
                     wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
                     wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
-                    ])
+                ])
                 i+=1
             self.logger.log_table(key="results", columns=self.log_columns, data=table)
 

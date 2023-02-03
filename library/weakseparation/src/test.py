@@ -1,9 +1,13 @@
 import torch
 
-dummy = torch.Tensor([[0,1,2,3,4,5,6,7,8,9,10,11]])
+mix = torch.tensor([[1,1],[2, 2],[3,3]])
 
-max_size = 10
+masks = torch.tensor([[[1,1],[1,1],[1,1]],
+                     [[2,2],[2,2],[2,2]],
+                     [[3,3],[3,3],[3,3]]])
 
-new_dummy = dummy[..., :max_size-dummy.shape[1]]
+# pred = torch.einsum("ij,ik->ij", masks, mix)
 
-print(new_dummy.shape)
+pred = mix * masks
+
+print(pred[:,1,:])

@@ -13,7 +13,7 @@ seed = 42
 frame_size = 512
 bins = int(frame_size / 2) + 1
 hop_size = 256
-mics = 1
+mics = 7
 max_sources = 2
 layers = 2
 hidden_dim = bins*max_sources
@@ -41,7 +41,7 @@ def main(args):
         wandb_logger = None
 
     dm = weakseparation.SeclumonsDataModule(
-        "/home/jacob/Dev/weakseparation/library/dataset/SECL-UMONS",
+        "/home/jacob/dev/weakseparation/library/dataset/SECL-UMONS",
         frame_size = frame_size,
         hop_size = hop_size,
         sample_rate=sample_rate,
@@ -50,7 +50,8 @@ def main(args):
         num_of_workers=num_of_workers
     )
 
-    model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics)
+    # model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics, max_sources)
+    model = weakseparation.UNet(1, max_sources, mics) 
     # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
     trainer = pl.Trainer(
         max_epochs=epochs,
