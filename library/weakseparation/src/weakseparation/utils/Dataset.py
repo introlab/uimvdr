@@ -17,6 +17,8 @@ class SeclumonsDataset(Dataset):
         self.sample_rate = sample_rate
         self.max_sources = max_sources
         self.gain = 10
+        self.effects = [["gain", "-n"], ]
+        self.type = type
 
         if forceCPU:
             self.device = 'cpu'
@@ -27,11 +29,11 @@ class SeclumonsDataset(Dataset):
                 self.device = 'cpu'
 
         if type == "train":
-            self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
-            # self.split = os.path.join(self.dir, "unilabel_split1_speech_train.csv")
+            # self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_speech_train.csv")
         elif type == "val":
-            self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
-            # self.split = os.path.join(self.dir, "unilabel_split1_speech_test.csv")
+            # self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_speech_test.csv")
         elif type == "predict":
             self.split = os.path.join(self.dir, "unilabel_split1_predict.csv")
         else:
@@ -79,10 +81,13 @@ class SeclumonsDataset(Dataset):
         x, file_sample_rate = self.get_multi_channel(wav_path)
 
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
+        if self.type == "train":
+            # Augmentation
+            x = torchaudio.sox_effects.apply_effects_tensor(x, file_sample_rate, effects=self.effects)[0]  * (torch.rand(1).item()*10 - 5)
 
-        # TODO: change number of seconds
+        # TODO: change number of seconds?
         x = self.get_right_number_of_samples(x, 3)
-
+        
         mix = self.stft(x)
 
         isolated_sources = mix[None, ...]
@@ -90,7 +95,7 @@ class SeclumonsDataset(Dataset):
         additionnal_idxs = []
         for _ in range(self.max_sources-1):
             # TODO: set the probability to 0.5
-            if torch.rand(1)[0] <= 1:
+            if torch.rand(1).item() <= 1:
                 while True:
                     if initial_label["room number"] == '1':
                         additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2+1, size=(1,))[0].item()
@@ -109,6 +114,9 @@ class SeclumonsDataset(Dataset):
                 orig_freq=file_sample_rate,
                 new_freq=self.sample_rate
             ).to(self.device)
+            if self.type == "train":
+                # Augmentation
+                x = torchaudio.sox_effects.apply_effects_tensor(x, file_sample_rate, effects=self.effects)[0] * (torch.rand(1).item()*10 - 5)
             additionnal_x = self.get_right_number_of_samples(additionnal_x, 3)
             additionnal_X = self.stft(additionnal_x)
             isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
@@ -123,17 +131,6 @@ class SeclumonsDataset(Dataset):
             sample_labels = torch.cat((
                 sample_labels,
                 torch.tensor([class_to_id["nothing"]])))
-
-
-        # plot_spectrogram_from_spectrogram(mix.cpu())
-        # plot_spectrogram_from_waveform(x.cpu(), self.sample_rate)
-        # plot_waveform(x.cpu(), sample_rate)
-
-        # istft = torchaudio.transforms.InverseSpectrogram(
-        #         n_fft=512, hop_length=256, window_fn=sqrt_hann_window
-        #     )
-        # resampled_x = istft(mix)
-        # torchaudio.save(f'./test.wav', resampled_x.cpu(), self.sample_rate)
         
         return mix, isolated_sources, sample_labels
 

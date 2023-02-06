@@ -51,7 +51,7 @@ def main(args):
     )
 
     # model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics, max_sources)
-    model = weakseparation.UNet(1, max_sources, mics) 
+    model = weakseparation.UNetMixIT(1, max_sources, mics) 
     # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
     trainer = pl.Trainer(
         max_epochs=epochs,
