@@ -17,7 +17,7 @@ mics = 7
 max_sources = 2
 layers = 2
 hidden_dim = bins*max_sources
-epochs = 200
+epochs = 1000
 batch_size=8
 num_of_workers=8
 
@@ -30,9 +30,10 @@ def main(args):
 
     pl.seed_everything(seed, workers=True)
 
+    # trainer.checkpoint_callback.best_model_path
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
-        filename='gru-{epoch:02d}-{val_loss:.5f}'
+        filename='unet-{epoch:02d}-{val_loss:.5f}'
     )
 
     if args.log:

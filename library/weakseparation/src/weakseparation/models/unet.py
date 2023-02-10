@@ -101,7 +101,6 @@ class UNet(pl.LightningModule):
         self.save_hyperparameters()
 
     def forward(self, x):
-        x = torch.real(x)
         down1 = self.down1(x)
         down2 = self.down2(down1)
         down3 = self.down3(down2)
@@ -136,7 +135,7 @@ class UNet(pl.LightningModule):
 
         masks= self(input)
 
-        pred = input * masks
+        pred = mix[:, 0][:, None, ...] * masks
 
         pit_loss, best_permutation = permutation_invariant_training(
             self.istft(pred),
@@ -174,6 +173,7 @@ class UNet(pl.LightningModule):
         isolatedSources = isolatedSources[:,:,0]
 
         input = torch.abs(mix).median(dim=1, keepdim=True).values
+
         # phases = torch.angle(mix)
 
         # for mic in range(1, self.mics):
@@ -182,7 +182,7 @@ class UNet(pl.LightningModule):
 
         masks= self(input)
 
-        pred = input * masks
+        pred = mix[:, 0][:, None, ...] * masks
 
         pit_loss, best_permutation = permutation_invariant_training(
             self.istft(pred),
@@ -264,7 +264,7 @@ class UNetMixIT(pl.LightningModule):
         self.istft = InverseSpectrogram(
                 n_fft=512, hop_length=256, window_fn=cuda_sqrt_hann_window
             )
-        self.mixit_loss = MixITLossWrapper(self.negative_SNR)
+        self.mixit_loss = MixITLossWrapper(multisrc_mse)
         
         self.log_columns = ["class", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
         self.epsilon = torch.finfo(torch.float).eps
@@ -337,13 +337,12 @@ class UNetMixIT(pl.LightningModule):
             nn.Conv2d(dim1, dim1, (3, 3), padding=1),
             nn.BatchNorm2d(dim1),
             nn.ReLU(),
-            nn.Conv2d(dim1, self.n_classes*2, (3, 3), padding=1),
+            nn.Conv2d(dim1, self.n_classes, (3, 3), padding=1),
         )
 
         self.save_hyperparameters()
 
     def forward(self, x):
-        x = torch.real(x)
         down1 = self.down1(x)
         down2 = self.down2(down1)
         down3 = self.down3(down2)
@@ -367,24 +366,29 @@ class UNetMixIT(pl.LightningModule):
         """
         mix, isolatedSources, labels  = batch
     
-        mix_of_mix = torch.reshape(mix, (int(mix.shape[0]/2), 2, mix.shape[1], mix.shape[2], mix.shape[3]))
+        # mix_of_mix = torch.reshape(mix, (int(mix.shape[0]/2), 2, mix.shape[1], mix.shape[2], mix.shape[3]))
 
-        input = torch.abs(torch.sum(mix_of_mix, dim=1, keepdim=True)).median(dim=2, keepdim=False).values
+        # input = torch.abs(torch.sum(mix_of_mix, dim=1, keepdim=True)).median(dim=2, keepdim=False).values
+        input = torch.abs(mix).median(dim=1, keepdim=True).values
 
         masks = self(input)
 
-        pred = torch.sum(mix_of_mix[:, :, 0], dim=1, keepdim=True) * masks
+        pred = mix[:, 0][:, None, ...] * masks
 
-        target = self.istft(mix_of_mix[:, :, 0])
-        loss, pred_waveform = self.mixit_loss(
-            self.istft(pred),
+        target = torch.abs(isolatedSources[:, :, 0])
+        loss, min_idx, parts = self.mixit_loss(
+            torch.abs(pred),
             target,
             return_est=True
         )
 
+        pred = self.mixit_loss.reorder_source(pred, isolatedSources[:, :, 0], min_idx, parts)
+        pred_waveform = self.istft(pred)
+        target_waveform = self.istft(isolatedSources[:, :, 0])
+        
         # Pytorch si-snr is si-sdr
-        snr = signal_noise_ratio(pred_waveform, target).mean()
-        sdr = scale_invariant_signal_distortion_ratio(pred_waveform, target).mean()
+        snr = signal_noise_ratio(pred_waveform, target_waveform).mean()
+        sdr = scale_invariant_signal_distortion_ratio(pred_waveform, target_waveform).mean()
 
 
         self.log("train_loss", loss)
@@ -395,35 +399,40 @@ class UNetMixIT(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         mix, isolatedSources, labels  = batch
-        
-        labels = labels.reshape((int(labels.shape[0]/2), 2, -1))
-        mix_of_mix = torch.reshape(mix, (int(mix.shape[0]/2), 2, mix.shape[1], mix.shape[2], mix.shape[3]))
 
-        input = torch.abs(torch.sum(mix_of_mix, dim=1, keepdim=True)).median(dim=2, keepdim=False).values
+        # mix isolated sources here to always have the same samples
+        target = isolatedSources.reshape((-1, self.sources, isolatedSources.shape[2], isolatedSources.shape[3], isolatedSources.shape[4]))
+        mix = torch.sum(target, dim=1)
+
+        input = torch.abs(mix).median(dim=1, keepdim=True).values
 
         masks = self(input)
 
-        pred = torch.sum(mix_of_mix[:, :, 0], dim=1, keepdim=True) * masks
+        # pred = torch.sum(mix_of_mix[:, :, 0], dim=1, keepdim=True) * masks
+        pred = mix[:, 0][:, None, ...] * masks
 
-        target = self.istft(mix_of_mix[:, :, 0])
-        loss, pred_waveform = self.mixit_loss(
-            self.istft(pred),
-            target,
+        loss, min_idx, parts = self.mixit_loss(
+            torch.abs(pred),
+            torch.abs(target[:, :, 0]),
             return_est=True
         )
 
+        pred = self.mixit_loss.reorder_source(pred, target[:, :, 0], min_idx, parts)
+        pred_waveform = self.istft(pred)
+        target_waveform = self.istft(target[:, :, 0])
+
         # Pytorch si-snr is si-sdr
-        snr = signal_noise_ratio(pred_waveform, target).mean()
-        sdr = scale_invariant_signal_distortion_ratio(pred_waveform, target).mean()
+        snr = signal_noise_ratio(pred_waveform, target_waveform).mean()
+        sdr = scale_invariant_signal_distortion_ratio(pred_waveform, target_waveform).mean()
 
         if not self.current_epoch % 49 and batch_idx == 0 and self.logger is not None:
             preds = pred_waveform[0]
-            groundTruths = target[0]
-            label = labels[0]
+            groundTruths = target_waveform[0]
+            label = labels[:,0]
             i = 0
             table = []
             for waveform_source, waveform_groundTruth, id in zip(preds, groundTruths, label):
-                class_label = [id_to_class[item.item()] for item in id]
+                class_label = id_to_class[id.item()]#[id_to_class[item.item()] for item in id]
                 table.append([
                     class_label,
                     wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title=class_label)),
