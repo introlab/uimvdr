@@ -4,7 +4,6 @@ import csv
 import torchaudio
 import torch
 
-from .PlotUtils import *
 from .LabelUtils import class_to_id
 from .Windows import sqrt_hann_window
 from torch.utils.data import Dataset
@@ -16,8 +15,7 @@ class SeclumonsDataset(Dataset):
         self.dir = dir
         self.sample_rate = sample_rate
         self.max_sources = max_sources
-        self.gain = 10
-        self.effects = [["gain", "-n"], ]
+        self.gain = 1
         self.type = type
 
         if forceCPU:
@@ -81,58 +79,57 @@ class SeclumonsDataset(Dataset):
         x, file_sample_rate = self.get_multi_channel(wav_path)
 
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
-        if self.type == "train":
-            # Augmentation
-            x = torchaudio.sox_effects.apply_effects_tensor(x, file_sample_rate, effects=self.effects)[0]  * (torch.rand(1).item()*10 - 5)
 
         # TODO: change number of seconds?
         x = self.get_right_number_of_samples(x, 3)
         
         mix = self.stft(x)
 
+        mix = self.normalize(mix, True if self.type == "train" else False)
+        # mix = self.normalize(mix, False)
+
         isolated_sources = mix[None, ...]
 
-        additionnal_idxs = []
-        for _ in range(self.max_sources-1):
-            # TODO: set the probability to 0.5
-            if torch.rand(1).item() <= 1:
-                while True:
-                    if initial_label["room number"] == '1':
-                        additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2+1, size=(1,))[0].item()
-                    else:
-                        additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2+1, high=len(self)-1, size=(1,))[0].item()
-                    
-                    if additionnal_idx != idx and not additionnal_idx in additionnal_idxs:
-                        break
-                additionnal_idxs.append(additionnal_idx)
+        if self.type == "train":
+            additionnal_idxs = []
+            for _ in range(self.max_sources-1):
+                # TODO: set the probability to 0.5
+                if torch.rand(1).item() <= 1:
+                    while True:
+                        if initial_label["room number"] == '1':
+                            additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2+1, size=(1,))[0].item()
+                        else:
+                            additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2+1, high=len(self)-1, size=(1,))[0].item()
+                        
+                        if additionnal_idx != idx and not additionnal_idx in additionnal_idxs:
+                            break
+                    additionnal_idxs.append(additionnal_idx)
 
-        for idx in additionnal_idxs:
-            wav_path = os.path.join(self.dir, self.paths_to_data[idx])
-            additionnal_x, _ = self.get_multi_channel(wav_path)
-            additionnal_x = torchaudio.functional.resample(
-                additionnal_x,
-                orig_freq=file_sample_rate,
-                new_freq=self.sample_rate
-            ).to(self.device)
-            if self.type == "train":
-                # Augmentation
-                x = torchaudio.sox_effects.apply_effects_tensor(x, file_sample_rate, effects=self.effects)[0] * (torch.rand(1).item()*10 - 5)
-            additionnal_x = self.get_right_number_of_samples(additionnal_x, 3)
-            additionnal_X = self.stft(additionnal_x)
-            isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
-            sample_labels = torch.cat(
-                (sample_labels,
-                torch.tensor([int(self.labels[self.get_name_for_annotations(wav_path)]["class number"])])))
-            mix += additionnal_X
+            for idx in additionnal_idxs:
+                wav_path = os.path.join(self.dir, self.paths_to_data[idx])
+                additionnal_x, _ = self.get_multi_channel(wav_path)
+                additionnal_x = torchaudio.functional.resample(
+                    additionnal_x,
+                    orig_freq=file_sample_rate,
+                    new_freq=self.sample_rate
+                ).to(self.device)
+                additionnal_x = self.get_right_number_of_samples(additionnal_x, 3)
+                additionnal_X = self.stft(additionnal_x)
+                additionnal_X = self.normalize(additionnal_X, True)
+                isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
+                sample_labels = torch.cat(
+                    (sample_labels,
+                    torch.tensor([int(self.labels[self.get_name_for_annotations(wav_path)]["class number"])])))
+                mix += additionnal_X
 
-        while isolated_sources.shape[0] < self.max_sources:
-            zeroes = torch.zeros_like(mix)
-            isolated_sources = torch.cat((isolated_sources, zeroes[None, ...]))
-            sample_labels = torch.cat((
-                sample_labels,
-                torch.tensor([class_to_id["nothing"]])))
+            while isolated_sources.shape[0] < self.max_sources:
+                zeroes = torch.zeros_like(mix)
+                isolated_sources = torch.cat((isolated_sources, zeroes[None, ...]))
+                sample_labels = torch.cat((
+                    sample_labels,
+                    torch.tensor([class_to_id["nothing"]])))
         
-        return mix, isolated_sources, sample_labels
+        return mix*self.gain, isolated_sources*self.gain, sample_labels
 
 
     @staticmethod
@@ -148,6 +145,20 @@ class SeclumonsDataset(Dataset):
 
         return x
 
+    @staticmethod
+    def normalize(X, augmentation = False):
+        # Equation: 10*torch.log10((torch.abs(X)**2).max()) = 0, max instead of mean because inital level
+
+        if augmentation:
+            aug = torch.rand(1).item()*10 - 5
+            augmentation_gain = 10 ** (aug/20)
+        else:
+            augmentation_gain = 1
+        
+        normalize_gain  = torch.sqrt(1/(torch.abs(X)**2).mean()) 
+       
+        return augmentation_gain * normalize_gain * X
+
     def get_multi_channel(self, wav_path):
         x = None
         for mic in range(7):
@@ -159,7 +170,7 @@ class SeclumonsDataset(Dataset):
                 x = single_mic
             else:
                 x = torch.cat((x, single_mic), 0)
-        return x*self.gain, file_sample_rate
+        return x, file_sample_rate
         
 
 
