@@ -1,4 +1,5 @@
 library/dataset/SECL-UMONS
+library/dataset/Librispeech
 lightning_logs/
 wandb/
 mc-weak-separation/

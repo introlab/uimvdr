@@ -33,7 +33,7 @@ def main(args):
     # trainer.checkpoint_callback.best_model_path
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
-        filename='unet-{epoch:02d}-{val_loss:.5f}'
+        filename='ast-{epoch:02d}-{val_loss:.5f}'
     )
 
     if args.log:
@@ -52,7 +52,7 @@ def main(args):
     )
 
     # model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics, max_sources)
-    model = weakseparation.UNetMixIT(1, max_sources, mics) 
+    model = weakseparation.Transformer(1, max_sources, mics, supervised=False) 
     # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
     trainer = pl.Trainer(
         max_epochs=epochs,

@@ -27,11 +27,11 @@ class SeclumonsDataset(Dataset):
                 self.device = 'cpu'
 
         if type == "train":
-            # self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
-            self.split = os.path.join(self.dir, "unilabel_split1_speech_train.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
+            # self.split = os.path.join(self.dir, "unilabel_split1_overfit.csv")
         elif type == "val":
-            # self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
-            self.split = os.path.join(self.dir, "unilabel_split1_speech_test.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
+            # self.split = os.path.join(self.dir, "unilabel_split1_overfit.csv")
         elif type == "predict":
             self.split = os.path.join(self.dir, "unilabel_split1_predict.csv")
         else:
