@@ -1,5 +1,9 @@
 library/dataset/SECL-UMONS
 library/dataset/Librispeech
+library/dataset/FUSS
+library/dataset/dEchorate
+library/weakseparation/src/scratch.py
 lightning_logs/
 wandb/
 mc-weak-separation/
+checkpoints/
