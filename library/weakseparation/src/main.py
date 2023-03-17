@@ -45,20 +45,9 @@ def main(args):
     else:
         wandb_logger = None
 
-    # dm = weakseparation.DataModule(
-    #     weakseparation.SeclumonsDataset,
-    #     "/home/jacob/dev/weakseparation/library/dataset/SECL-UMONS",
-    #     frame_size = frame_size,
-    #     hop_size = hop_size,
-    #     sample_rate=sample_rate,
-    #     max_sources=max_sources,
-    #     batch_size=batch_size,
-    #     num_of_workers=num_of_workers
-    # )
-
     dm = weakseparation.DataModule(
-        weakseparation.LibrispeechDataset,
-        "/home/jacob/dev/weakseparation/library/dataset/Librispeech",
+        weakseparation.SeclumonsDataset,
+        "/home/jacob/dev/weakseparation/library/dataset/SECL-UMONS",
         frame_size = frame_size,
         hop_size = hop_size,
         sample_rate=sample_rate,
@@ -67,6 +56,18 @@ def main(args):
         num_of_workers=num_of_workers,
         return_spectrogram=return_spectrogram,
     )
+
+    # dm = weakseparation.DataModule(
+    #     weakseparation.LibrispeechDataset,
+    #     "/home/jacob/dev/weakseparation/library/dataset/Librispeech",
+    #     frame_size = frame_size,
+    #     hop_size = hop_size,
+    #     sample_rate=sample_rate,
+    #     max_sources=max_sources,
+    #     batch_size=batch_size,
+    #     num_of_workers=num_of_workers,
+    #     return_spectrogram=return_spectrogram,
+    # )
 
     # model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics, max_sources)
     # model = weakseparation.ASTTransformer(1, max_sources, mics, supervised=supervised) 

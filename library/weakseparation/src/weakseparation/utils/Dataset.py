@@ -10,13 +10,14 @@ from torch.utils.data import Dataset
 
 
 class SeclumonsDataset(Dataset):
-    def __init__(self, dir, frame_size, hop_size, type="train", sample_rate=16000, max_sources=3, forceCPU=False) -> None:
+    def __init__(self, dir, frame_size, hop_size, type="train", sample_rate=16000, max_sources=3, forceCPU=False, return_spectrogram=True) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
         self.max_sources = max_sources
         self.gain = 1
         self.type = type
+        self.return_spectrogram = return_spectrogram
 
         if forceCPU:
             self.device = 'cpu'
@@ -27,11 +28,11 @@ class SeclumonsDataset(Dataset):
                 self.device = 'cpu'
 
         if type == "train":
-            self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
-            # self.split = os.path.join(self.dir, "unilabel_split1_overfit.csv")
+            # self.split = os.path.join(self.dir, "unilabel_split1_train.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_speech_train.csv")
         elif type == "val":
-            self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
-            # self.split = os.path.join(self.dir, "unilabel_split1_overfit.csv")
+            # self.split = os.path.join(self.dir, "unilabel_split1_test.csv")
+            self.split = os.path.join(self.dir, "unilabel_split1_speech_train.csv")
         elif type == "predict":
             self.split = os.path.join(self.dir, "unilabel_split1_predict.csv")
         else:
@@ -65,6 +66,10 @@ class SeclumonsDataset(Dataset):
             window_fn=sqrt_hann_window
         )
 
+        self.istft = torchaudio.transforms.InverseSpectrogram(
+            n_fft=frame_size, hop_length=hop_size, window_fn=sqrt_hann_window
+        )
+
 
     def __len__(self):
         return len(self.paths_to_data)
@@ -85,49 +90,53 @@ class SeclumonsDataset(Dataset):
         
         mix = self.stft(x)
 
-        mix = self.normalize(mix, True if self.type == "train" else False)
+        mix = self.normalize(mix, True)
         # mix = self.normalize(mix, False)
+
+        if not self.return_spectrogram:
+            mix = self.istft(mix)
 
         isolated_sources = mix[None, ...]
 
-        if self.type == "train":
-            additionnal_idxs = []
-            for _ in range(self.max_sources-1):
-                # TODO: set the probability to 0.5
-                if torch.rand(1).item() <= 1:
-                    while True:
-                        if initial_label["room number"] == '1':
-                            additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2+1, size=(1,))[0].item()
-                        else:
-                            additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2+1, high=len(self)-1, size=(1,))[0].item()
-                        
-                        if additionnal_idx != idx and not additionnal_idx in additionnal_idxs:
-                            break
-                    additionnal_idxs.append(additionnal_idx)
+        additionnal_idxs = []
+        for _ in range(self.max_sources-1):
+            # TODO: set the probability to 0.5
+            if torch.rand(1).item() <= 1:
+                while True:
+                    if initial_label["room number"] == '1':
+                        additionnal_idx = torch.randint(low=0, high=self.idx_from_room1_to_room2+1, size=(1,))[0].item()
+                    else:
+                        additionnal_idx = torch.randint(low=self.idx_from_room1_to_room2+1, high=len(self)-1, size=(1,))[0].item()
+                    
+                    if additionnal_idx != idx and not additionnal_idx in additionnal_idxs:
+                        break
+                additionnal_idxs.append(additionnal_idx)
 
-            for idx in additionnal_idxs:
-                wav_path = os.path.join(self.dir, self.paths_to_data[idx])
-                additionnal_x, _ = self.get_multi_channel(wav_path)
-                additionnal_x = torchaudio.functional.resample(
-                    additionnal_x,
-                    orig_freq=file_sample_rate,
-                    new_freq=self.sample_rate
-                ).to(self.device)
-                additionnal_x = self.get_right_number_of_samples(additionnal_x, 3)
-                additionnal_X = self.stft(additionnal_x)
-                additionnal_X = self.normalize(additionnal_X, True)
-                isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
-                sample_labels = torch.cat(
-                    (sample_labels,
-                    torch.tensor([int(self.labels[self.get_name_for_annotations(wav_path)]["class number"])])))
-                mix += additionnal_X
+        for idx in additionnal_idxs:
+            wav_path = os.path.join(self.dir, self.paths_to_data[idx])
+            additionnal_x, _ = self.get_multi_channel(wav_path)
+            additionnal_x = torchaudio.functional.resample(
+                additionnal_x,
+                orig_freq=file_sample_rate,
+                new_freq=self.sample_rate
+            ).to(self.device)
+            additionnal_x = self.get_right_number_of_samples(additionnal_x, 3)
+            additionnal_X = self.stft(additionnal_x)
+            additionnal_X = self.normalize(additionnal_X, True)
+            if not self.return_spectrogram:
+                additionnal_X = self.istft(additionnal_X)
+            isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
+            sample_labels = torch.cat(
+                (sample_labels,
+                torch.tensor([int(self.labels[self.get_name_for_annotations(wav_path)]["class number"])])))
+            mix += additionnal_X
 
-            while isolated_sources.shape[0] < self.max_sources:
-                zeroes = torch.zeros_like(mix)
-                isolated_sources = torch.cat((isolated_sources, zeroes[None, ...]))
-                sample_labels = torch.cat((
-                    sample_labels,
-                    torch.tensor([class_to_id["nothing"]])))
+        while isolated_sources.shape[0] < self.max_sources:
+            zeroes = torch.zeros_like(mix)
+            isolated_sources = torch.cat((isolated_sources, zeroes[None, ...]))
+            sample_labels = torch.cat((
+                sample_labels,
+                torch.tensor([class_to_id["nothing"]])))
         
         return mix*self.gain, isolated_sources*self.gain, sample_labels
 
@@ -147,6 +156,8 @@ class SeclumonsDataset(Dataset):
                 x = x[..., random_number:nb_of_samples+random_number]
             else:    
                 x = x[..., :nb_of_samples]
+
+        return x
 
     @staticmethod
     def normalize(X, augmentation = False):

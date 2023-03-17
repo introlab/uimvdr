@@ -169,6 +169,9 @@ class SudoRmRf(pl.LightningModule):
         """
         mix, isolatedSources, labels  = batch
 
+        isolatedSources = isolatedSources[:,:,0]
+        mix = mix[:,0][:,None,...]
+
         target_waveform = isolatedSources.reshape(-1, int(self.sources/2), int(self.sources/2), isolatedSources.shape[-1])
         target_waveform = torch.sum(target_waveform, dim=2, keepdim=False)
 
@@ -200,6 +203,9 @@ class SudoRmRf(pl.LightningModule):
     
     def validation_step_unsupervised(self, batch, batch_idx):
         mix, isolatedSources, labels  = batch
+
+        isolatedSources = isolatedSources[:,:,0]
+        mix = mix[:,0][:,None,...]
 
         labels = labels.reshape(-1, int(self.sources/2), int(self.sources/2))
 
