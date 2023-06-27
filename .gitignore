@@ -2,6 +2,7 @@ library/dataset/SECL-UMONS
 library/dataset/Librispeech
 library/dataset/FUSS
 library/dataset/dEchorate
+library/dataset/FSD50K
 library/weakseparation/src/scratch.py
 lightning_logs/
 wandb/

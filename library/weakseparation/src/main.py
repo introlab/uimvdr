@@ -9,14 +9,14 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 sample_rate = 16000
-supervised = False
-return_spectrogram = False
+supervised = True
+return_spectrogram = True
 seed = 42
 frame_size = 512
 bins = int(frame_size / 2) + 1
 hop_size = int(frame_size / 2)
-mics = 7
-max_sources = 2
+mics = 5
+max_sources = 4
 if not supervised:
     max_sources *= 2
 layers = 2
@@ -26,7 +26,7 @@ batch_size=8
 num_of_workers=8
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
-    batch_size=6
+    batch_size=8
     num_of_workers=16
     torch.set_float32_matmul_precision('high')
 
@@ -36,8 +36,9 @@ def main(args):
 
     # trainer.checkpoint_callback.best_model_path
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
-        filename='ast-{epoch:02d}-{val_loss:.5f}'
+        monitor='val_SI-SDR',
+        mode = 'max',
+        filename='unet-{epoch:02d}-{val_loss:.5f}-{val_SI-SDR:.3f}'
     )
 
     if args.log:
@@ -46,8 +47,8 @@ def main(args):
         wandb_logger = None
 
     dm = weakseparation.DataModule(
-        weakseparation.SeclumonsDataset,
-        "/home/jacob/dev/weakseparation/library/dataset/SECL-UMONS",
+        weakseparation.FUSSDataset,
+        "/home/jacob/dev/weakseparation/library/dataset/FUSS/FUSS_ssdata/ssdata",
         frame_size = frame_size,
         hop_size = hop_size,
         sample_rate=sample_rate,
@@ -71,7 +72,9 @@ def main(args):
 
     # model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics, max_sources)
     # model = weakseparation.ASTTransformer(1, max_sources, mics, supervised=supervised) 
-    model = weakseparation.SudoRmRf(1, max_sources, mics, supervised=supervised) 
+    # model = weakseparation.SudoRmRf(1, max_sources, mics, supervised=supervised)
+    model = weakseparation.UNetMixIT(2, max_sources, mics, supervised=supervised)
+    # model = weakseparation.RNN.GRU(input_size=514, hidden_size=256, num_layers=4, mics=1, sources=max_sources)
     # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
     trainer = pl.Trainer(
         max_epochs=epochs,
