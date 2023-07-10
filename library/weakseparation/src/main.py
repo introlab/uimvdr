@@ -8,21 +8,22 @@ import torch
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
+target_class = "Bark"
 sample_rate = 16000
 supervised = True
-return_spectrogram = True
+return_spectrogram = False
 seed = 42
-frame_size = 512
+frame_size = 1024
 bins = int(frame_size / 2) + 1
 hop_size = int(frame_size / 2)
 mics = 5
-max_sources = 4
+max_sources = 2
 if not supervised:
     max_sources *= 2
 layers = 2
 hidden_dim = bins*max_sources
-epochs = 1000
-batch_size=8
+epochs = 205
+batch_size=16
 num_of_workers=8
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
@@ -46,9 +47,22 @@ def main(args):
     else:
         wandb_logger = None
 
+    # dm = weakseparation.DataModule(
+    #     weakseparation.FUSSDataset,
+    #     "/home/jacob/dev/weakseparation/library/dataset/FUSS/FUSS_ssdata/ssdata",
+    #     frame_size = frame_size,
+    #     hop_size = hop_size,
+    #     sample_rate=sample_rate,
+    #     max_sources=max_sources,
+    #     batch_size=batch_size,
+    #     num_of_workers=num_of_workers,
+    #     return_spectrogram=return_spectrogram,
+    # )
+
     dm = weakseparation.DataModule(
-        weakseparation.FUSSDataset,
-        "/home/jacob/dev/weakseparation/library/dataset/FUSS/FUSS_ssdata/ssdata",
+        weakseparation.FSD50K.FSD50KDataset,
+        "/home/jacob/dev/weakseparation/library/dataset/FSD50K",
+        target_class = target_class,
         frame_size = frame_size,
         hop_size = hop_size,
         sample_rate=sample_rate,
@@ -73,9 +87,10 @@ def main(args):
     # model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics, max_sources)
     # model = weakseparation.ASTTransformer(1, max_sources, mics, supervised=supervised) 
     # model = weakseparation.SudoRmRf(1, max_sources, mics, supervised=supervised)
-    model = weakseparation.UNetMixIT(2, max_sources, mics, supervised=supervised)
+    # model = weakseparation.UNetMixIT(2, max_sources, mics, supervised=supervised)
     # model = weakseparation.RNN.GRU(input_size=514, hidden_size=256, num_layers=4, mics=1, sources=max_sources)
     # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
+    model = weakseparation.ConvTasNet(N=frame_size, H=bins, activate="softmax", supervised=supervised)
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator='gpu',
