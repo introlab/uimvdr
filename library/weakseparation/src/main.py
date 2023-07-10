@@ -39,7 +39,7 @@ def main(args):
     checkpoint_callback = ModelCheckpoint(
         monitor='val_SI-SDR',
         mode = 'max',
-        filename='unet-{epoch:02d}-{val_loss:.5f}-{val_SI-SDR:.3f}'
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_SI-SDR:.3f}'
     )
 
     if args.log:
