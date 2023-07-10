@@ -1,0 +1,5 @@
+library/dataset
+lightning_logs/
+wandb/
+mc-weak-separation/
+checkpoints/
