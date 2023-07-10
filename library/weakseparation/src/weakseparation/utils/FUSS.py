@@ -160,8 +160,8 @@ class FUSSDataset(Dataset):
         """
         Method to apply multichannel RIRs to a mono-signal.
         Args:
-            rirs (ndarray): Multi-channel RIR,   shape = (channels, frames)
-            source (ndarray): Mono-channel input signal to be reflected to multiple microphones (frames,)
+            rirs (tensor): Multi-channel RIR,   shape = (channels, frames)
+            source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
         """
         channels = rirs.shape[0]
         frames = len(source)
