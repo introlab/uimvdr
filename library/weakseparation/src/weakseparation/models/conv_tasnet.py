@@ -7,6 +7,8 @@
 '''
 
 import os
+from typing import List, Union
+from pytorch_lightning.utilities.types import EPOCH_OUTPUT
 import torch
 import torch.nn as nn
 from torch import optim
@@ -354,6 +356,148 @@ class ConvTasNet(pl.LightningModule):
 
         return loss
     
+    def training_step_unsupervised(self, batch, batch_idx):
+        mix, isolatedSources, _  = batch
+
+        # Ignore mics for now
+        mix = mix[:,0]
+        isolatedSources = isolatedSources[:,:,0]
+
+        isolated_mix, mix = self.prepare_data_for_unsupervised(mix)
+
+        isolated_pred = self(mix)
+
+        isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
+
+        loss, min_idx, parts = self.mixit_loss(
+            isolated_pred,
+            isolated_mix,
+            return_est=True
+        )
+
+        pred = self.mixit_loss.reorder_source(isolated_pred, isolated_mix, min_idx, parts)
+        
+        # Pytorch si-snr is si-sdr
+        snr = signal_noise_ratio(pred, isolated_mix).mean()
+        sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+        
+        self.log("train_loss", loss, batch_size=mix.shape[0])
+        self.log('train_SNR', snr, batch_size=mix.shape[0])
+        self.log('train_SI-SDR', sdr, batch_size=mix.shape[0])
+
+        return loss
+
+    def validation_step_unsupervised(self, batch, batch_idx):
+        mix, _, _  = batch
+
+        # Ignore mics for now
+        mix = mix[:,0]
+
+        isolated_mix, mix = self.prepare_data_for_unsupervised(mix)
+
+        isolated_pred = self(mix)
+
+        isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
+
+        loss, min_idx, parts = self.mixit_loss(
+            isolated_pred,
+            isolated_mix,
+            return_est=True
+        )
+
+        pred = self.mixit_loss.reorder_source(isolated_pred, isolated_mix, min_idx, parts)
+        
+        # Pytorch si-snr is si-sdr
+        snr = signal_noise_ratio(pred, isolated_mix).mean()
+        sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+        
+        self.log('val_loss', loss, batch_size=mix.shape[0])
+        self.log('val_SNR', snr, batch_size=mix.shape[0])
+        self.log('val_SI-SDR', sdr, batch_size=mix.shape[0])
+
+        return loss
+    
+    def validation_epoch_end(self, outputs):
+        outputs.clear()
+
+        # if not self.current_epoch % 50 and self.logger is not None:
+        if not self.current_epoch % 50:
+            mix0, isolatedSources0, labels0 = self.trainer.datamodule.dataset_val[0]
+            mix1, isolatedSources1, labels1 = self.trainer.datamodule.dataset_val[1]
+
+            mix = torch.stack((mix0, mix1)).to(self.device)
+            # isolatedSources = torch.stack((isolatedSources0, isolatedSources1)).to(self.device)
+            labels = [labels0, labels1]
+
+            # Ignore mics for now
+            mix = mix[:,0]
+
+            isolated_mix, mix = self.prepare_data_for_unsupervised(mix)
+
+            isolated_pred = self(mix)
+
+            isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
+
+            loss, min_idx, parts = self.mixit_loss(
+                isolated_pred,
+                isolated_mix,
+                return_est=True
+            )
+
+            pred = self.mixit_loss.reorder_source(isolated_pred, isolated_mix, min_idx, parts)
+
+            preds = pred[0]
+            groundTruths = isolated_mix[0]
+            label = np.array(labels).transpose().reshape(-1, self.num_spks)
+            label = label[0,:]
+            i = 0
+            table = []
+            for waveform_source, waveform_groundTruth in zip(preds, groundTruths):
+                table.append([
+                    f"{label[i]}, {label[i+2]}",
+                    wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
+                    wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
+                    wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
+                    wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                ])
+                i+=1
+            self.logger.log_table(key="results", columns=self.log_columns, data=table)
+
+            isolated_pred = isolated_pred[0]
+            for idx, source in enumerate(isolated_pred):
+                wandb.log({f"Source{idx}": wandb.Audio(source.cpu().numpy(), sample_rate=16000)})
+
+        return
+    
+    def mixture_consistency_projection(self, pred, mix):
+        """
+            Mixture consistency projection from Mixit article
+            Args:
+                pred (Tensor): Batch, Sources, Time
+                mix (Tensor): Batch, Time
+
+            Returns:
+                (Tensor):  Batch, Sources, Time
+        """
+        consistent_pred = torch.zeros_like(pred)
+        for idx in range(self.num_spks):
+            consistent_pred[:, idx] = pred[:, idx] + (mix - (torch.sum(pred, dim=1)-pred[:, idx]))/self.num_spks
+        return consistent_pred
+    
+    def prepare_data_for_unsupervised(self, mix):
+        """
+            Args:
+                mix (Tensor): Batch, Time 
+            
+            Returns:
+                (Tuple of tensors): (Batch/2, 2, Time), (Batch/2, Time)
+        """
+        isolated_mix = mix.reshape(int(mix.shape[0]/2), -1, mix.shape[1])
+        new_mix = torch.sum(isolated_mix, dim=1, keepdim=False)
+
+        return isolated_mix, new_mix
+
+
     @staticmethod
     def negative_si_sdr(pred, target):
         return -1*scale_invariant_signal_distortion_ratio(pred, target).mean(-1)

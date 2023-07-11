@@ -158,6 +158,74 @@ class FSD50KDataset(Dataset):
 
         return mix, isolated_sources, idxs_classes
     
+    def get_serialized_sample(self, idx, key):
+        wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav") 
+
+        x, file_sample_rate = torchaudio.load(wav_path)
+        x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
+        # TODO: number of seconds should be a parameter
+        x = self.get_right_number_of_samples(x, self.sample_rate, 5, shuffle=False)
+
+        if self.rir:
+            room = random.randint(0, len(self.rooms)-1)
+            array_idx = random.randint(0, 5) * 5 
+            source_list = []
+            rir = self.select_rir(source_list, room, array_idx)
+            x = self.apply_rir(rir, x[0])[None,0,:]
+
+        mix = self.stft(x)
+
+        mix = self.normalize(mix, True)
+
+        if not self.return_spectrogram:
+            mix = self.istft(mix)
+
+        isolated_sources = mix.clone()[None, ...]
+
+        additionnal_idxs = []
+        idxs_classes = [self.target_class]
+        for _ in range(self.max_sources-1):
+            # TODO: set the probability to 0.5
+            if random.random() >= 0:
+                while True:
+                    additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
+                    additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
+                    if additionnal_idx_class not in idxs_classes:
+                        additionnal_idxs.append(additionnal_idx)
+                        if len(idxs_classes) > 1:
+                            idxs_classes[1] += " : " + additionnal_idx_class
+                        else:
+                            idxs_classes.append(additionnal_idx_class)
+                        break
+
+        additional_mix = torch.zeros_like(mix)
+        for index in additionnal_idxs:
+            wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[index] + ".wav") 
+            additionnal_x, file_sample_rate = torchaudio.load(wav_path)
+            additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
+            # TODO: number of seconds should be a parameter
+            additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, 5, shuffle=True)
+
+            if self.rir:
+                rir = self.select_rir(source_list, room, array_idx)
+                additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
+
+            additionnal_X = self.stft(additionnal_x)
+            additionnal_X = self.normalize(additionnal_X, True)
+            if not self.return_spectrogram:
+                additionnal_X = self.istft(additionnal_X)
+                if torch.sum(torch.isnan(additionnal_X)) >= 1:
+                    print(wav_path)
+                    additionnal_X = torch.zeros_like(additionnal_X)
+            
+            additional_mix += additionnal_X
+            mix += additionnal_X
+
+        isolated_sources = torch.cat((isolated_sources, additional_mix[None, ...]))
+
+
+        return mix, isolated_sources, idxs_classes
+    
     @staticmethod
     def get_right_number_of_samples(x, sample_rate, seconds, shuffle=False):
         nb_of_samples = seconds*sample_rate

@@ -10,7 +10,7 @@ from pytorch_lightning.loggers import WandbLogger
 
 target_class = "Bark"
 sample_rate = 16000
-supervised = True
+supervised = False
 return_spectrogram = False
 seed = 42
 frame_size = 1024
@@ -18,16 +18,17 @@ bins = int(frame_size / 2) + 1
 hop_size = int(frame_size / 2)
 mics = 5
 max_sources = 2
+num_speakers = max_sources
 if not supervised:
-    max_sources *= 2
+    num_speakers *= 2
 layers = 2
 hidden_dim = bins*max_sources
-epochs = 205
+epochs = 3005
 batch_size=16
 num_of_workers=8
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
-    batch_size=8
+    batch_size=16
     num_of_workers=16
     torch.set_float32_matmul_precision('high')
 
@@ -90,7 +91,7 @@ def main(args):
     # model = weakseparation.UNetMixIT(2, max_sources, mics, supervised=supervised)
     # model = weakseparation.RNN.GRU(input_size=514, hidden_size=256, num_layers=4, mics=1, sources=max_sources)
     # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
-    model = weakseparation.ConvTasNet(N=frame_size, H=bins, activate="softmax", supervised=supervised)
+    model = weakseparation.ConvTasNet(N=frame_size, H=bins, activate="softmax", num_spks=num_speakers, supervised=supervised)
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator='gpu',
