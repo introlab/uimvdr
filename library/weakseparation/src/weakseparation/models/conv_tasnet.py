@@ -420,8 +420,7 @@ class ConvTasNet(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         outputs.clear()
 
-        # if not self.current_epoch % 50 and self.logger is not None:
-        if not self.current_epoch % 50:
+        if not self.current_epoch % 50 and self.logger is not None:
             mix0, isolatedSources0, labels0 = self.trainer.datamodule.dataset_val[0]
             mix1, isolatedSources1, labels1 = self.trainer.datamodule.dataset_val[1]
 
