@@ -18,9 +18,10 @@ bins = int(frame_size / 2) + 1
 hop_size = int(frame_size / 2)
 mics = 5
 max_sources = 2
-num_speakers = max_sources
+num_speakers = 2
 if not supervised:
-    num_speakers *= 2
+    max_sources *= 2
+    num_speakers = max_sources
 layers = 2
 hidden_dim = bins*max_sources
 epochs = 3005
