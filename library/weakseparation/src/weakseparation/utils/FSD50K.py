@@ -13,7 +13,18 @@ from scipy import signal
 
 
 class FSD50KDataset(Dataset):
-    def __init__(self, dir, frame_size, hop_size, target_class="Bark", type="train", sample_rate=16000, max_sources=3, forceCPU=False, return_spectrogram=True, rir=True) -> None:
+    def __init__(self, 
+                 dir,
+                 frame_size, 
+                 hop_size, 
+                 target_class="Bark", 
+                 type="train", 
+                 sample_rate=16000, 
+                 max_sources=3, 
+                 forceCPU=False, 
+                 return_spectrogram=True, 
+                 rir=False,
+                 supervised=True) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
@@ -23,11 +34,12 @@ class FSD50KDataset(Dataset):
         self.type = type
         self.rir = rir
         self.return_spectrogram = return_spectrogram
-        ontology_dict = {}
+        self.supervised = supervised
+        self.ontology_dict = {}
         ontology = json.load(open(os.path.join(dir, "FSD50K.ground_truth", "ontology.json")))
         for item in ontology:
-            ontology_dict[item["id"]] = item
-        name_to_id = {v['name']: k for k, v in ontology_dict.items()}
+            self.ontology_dict[item["id"]] = item
+        name_to_id = {v['name']: k for k, v in self.ontology_dict.items()}
 
         if forceCPU:
             self.device = 'cpu'
@@ -48,14 +60,13 @@ class FSD50KDataset(Dataset):
                     ids = row[2].split(",")
                     multiple_leaf_class = False
                     one_leaf_class = False
-
                     
                     for identifier in ids:
-                        if ontology_dict[identifier] and not ontology_dict[identifier]['child_ids']:
+                        if self.ontology_dict[identifier] and not self.ontology_dict[identifier]['child_ids']:
                             if one_leaf_class:
                                 multiple_leaf_class = True
                             if not one_leaf_class:
-                                leaf_class = ontology_dict[identifier]['name']
+                                leaf_class = self.ontology_dict[identifier]['name']
                                 one_leaf_class = True
 
                     if (one_leaf_class and not multiple_leaf_class) or \
@@ -64,8 +75,14 @@ class FSD50KDataset(Dataset):
                             self.paths_to_target_data.append(row[0]) 
                         else:
                             self.paths_to_data.append(row[0])
-                        list_of_classes = [ontology_dict[n]['name'] for n in ids]
+                        list_of_classes = [self.ontology_dict[n]['name'] for n in ids]
                         self.labels[row[0]] = ' '.join(map(str, list_of_classes))
+
+        # List of target classe(s)
+        target_id = name_to_id[self.target_class]
+        self.list_of_target_classes = [target_id]
+        self.list_of_target_classes.extend(self.get_child_classes(self.ontology_dict[target_id]['child_ids']))
+        self.list_of_target_classes = [self.ontology_dict[n]['name'] for n in self.list_of_target_classes]
 
         if self.rir:
             self.path_to_rirs = "/home/jacob/dev/weakseparation/library/dataset/dEchorate/dEchorate_rir.h5"
@@ -83,6 +100,15 @@ class FSD50KDataset(Dataset):
         self.istft = torchaudio.transforms.InverseSpectrogram(
             n_fft=frame_size, hop_length=hop_size, window_fn=sqrt_hann_window
         )
+
+    def get_child_classes(self, list_of_children):
+        all_children = []
+        for child in list_of_children:
+            all_children.append(child)
+            if children_of_child := self.get_child_classes(self.ontology_dict[child]['child_ids']):
+                all_children.extend(children_of_child)
+
+        return all_children
 
     def __len__(self):
         return len(self.paths_to_target_data)
@@ -102,53 +128,61 @@ class FSD50KDataset(Dataset):
             rir = self.select_rir(source_list, room, array_idx)
             x = self.apply_rir(rir, x[0])[None,0,:]
 
-        mix = self.stft(x)
-
-        mix = self.normalize(mix, True)
-
-        if not self.return_spectrogram:
-            mix = self.istft(mix)
+        mix = self.rsm_normalize(x, True)
 
         isolated_sources = mix.clone()[None, ...]
 
         additionnal_idxs = []
-        idxs_classes = [self.target_class]
-        for _ in range(self.max_sources-1):
-            # TODO: set the probability to 0.5
-            if random.random() >= 0:
+        idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
+        for source_nb in range(self.max_sources-1):
+            # TODO: set the probability to non-zero
+            if random.random() >= 0.2 or \
+               (not self.supervised and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
                     additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
-                    if additionnal_idx_class not in idxs_classes:
+                    if additionnal_idx_class not in idxs_classes and additionnal_idx_class not in self.list_of_target_classes:
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
+            else:
+                # Empty source
+                additionnal_idxs.append(-1)
+                idxs_classes.append("nothing") 
 
-        additional_mix = torch.zeros_like(mix)
         for index in additionnal_idxs:
-            wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[index] + ".wav") 
-            additionnal_x, file_sample_rate = torchaudio.load(wav_path)
-            additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
-            # TODO: number of seconds should be a parameter
-            additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, 5, shuffle=True)
+            if index == -1:
+                additionnal_x = torch.zeros_like(mix)
+            else:
+                wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[index] + ".wav") 
+                additionnal_x, file_sample_rate = torchaudio.load(wav_path)
+                additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
+                # TODO: number of seconds should be a parameter
+                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, 5, shuffle=True)
 
-            if self.rir:
-                rir = self.select_rir(source_list, room, array_idx)
-                additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
+                if self.rir:
+                    rir = self.select_rir(source_list, room, array_idx)
+                    additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
 
-            additionnal_X = self.stft(additionnal_x)
-            additionnal_X = self.normalize(additionnal_X, True)
-            if not self.return_spectrogram:
-                additionnal_X = self.istft(additionnal_X)
-                if torch.sum(torch.isnan(additionnal_X)) >= 1:
-                    print(wav_path)
-                    additionnal_X = torch.zeros_like(additionnal_X)
-            
-            additional_mix += additionnal_X
-            mix += additionnal_X
+                
+                additionnal_x = self.rsm_normalize(additionnal_x, True)
 
-            isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
+                mix += additionnal_x
 
+            isolated_sources = torch.cat((isolated_sources, additionnal_x[None, ...]))
+
+        mix, factor = self.peak_normalize(mix)
+        isolated_sources *= factor
+
+        #randomize volume
+        volume = random.random()
+
+        mix *= volume
+        isolated_sources *= volume
+
+        if self.return_spectrogram:
+            mix = self.stft(mix)
+            isolated_sources = self.stft(isolated_sources)
 
         return mix, isolated_sources, idxs_classes
     
@@ -170,55 +204,63 @@ class FSD50KDataset(Dataset):
             rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
             x = self.apply_rir(rir, x[0])[None,0,:]
 
-        mix = self.stft(x)
-
-        mix = self.normalize(mix, False)
-
-        if not self.return_spectrogram:
-            mix = self.istft(mix)
+        mix = self.rsm_normalize(x, False)
 
         isolated_sources = mix.clone()[None, ...]
 
         additionnal_idxs = []
-        idxs_classes = [self.target_class]
-        additionnal_idx = idx*(key % len(self.paths_to_data))
-        for _ in range(self.max_sources-1):
-            while True:
-                additionnal_idx += 1
-                additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
-                if additionnal_idx_class not in idxs_classes:
-                    additionnal_idxs.append(additionnal_idx)
-                    idxs_classes.append(additionnal_idx_class)
-                    break
+        idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
+        additionnal_idx = (idx*key) % len(self.paths_to_data)
+        for source_nb in range(self.max_sources-1):
+            if random.random() >= 0.2 or \
+               (not self.supervised and source_nb == int(self.max_sources //2)):
+                while True:
+                    additionnal_idx += 1
+                    additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
+                    if additionnal_idx_class not in idxs_classes and additionnal_idx_class not in self.list_of_target_classes:
+                        additionnal_idxs.append(additionnal_idx)
+                        idxs_classes.append(additionnal_idx_class)
+                        break
+            else:
+                # Empty source
+                additionnal_idxs.append(-1)
+                idxs_classes.append("nothing") 
 
         additional_mix = torch.zeros_like(mix)
         for num_of_additionnal, index in enumerate(additionnal_idxs):
-            wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[index] + ".wav") 
-            additionnal_x, file_sample_rate = torchaudio.load(wav_path)
-            additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
-            # TODO: number of seconds should be a parameter
-            additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, 5, shuffle=False)
+            if index == -1:
+                additionnal_x = torch.zeros_like(additional_mix)
+            else:
+                wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[index] + ".wav") 
+                additionnal_x, file_sample_rate = torchaudio.load(wav_path)
+                additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
+                # TODO: number of seconds should be a parameter
+                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, 5, shuffle=False)
 
-            if self.rir:
-                rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[num_of_additionnal+1]][()][:,array_idx:array_idx+5]
-                rir = rir.transpose()
-                rir = torch.tensor(rir).to(torch.float32)
-                rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
-                additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
+                if self.rir:
+                    rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[num_of_additionnal+1]][()][:,array_idx:array_idx+5]
+                    rir = rir.transpose()
+                    rir = torch.tensor(rir).to(torch.float32)
+                    rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
+                    additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
 
-            additionnal_X = self.stft(additionnal_x)
-            additionnal_X = self.normalize(additionnal_X, False)
-            if not self.return_spectrogram:
-                additionnal_X = self.istft(additionnal_X)
-                if torch.sum(torch.isnan(additionnal_X)) >= 1:
-                    print(wav_path)
-                    additionnal_X = torch.zeros_like(additionnal_X)
-            
-            additional_mix += additionnal_X
-            mix += additionnal_X
+                additionnal_x = self.rsm_normalize(additionnal_x, False)
+                
+                mix += additionnal_x
 
-            isolated_sources = torch.cat((isolated_sources, additionnal_X[None, ...]))
+            isolated_sources = torch.cat((isolated_sources, additionnal_x[None, ...]))
 
+        mix, factor = self.peak_normalize(mix)
+        isolated_sources *= factor
+
+        volume = 0.75
+
+        mix *= volume
+        isolated_sources *= volume
+
+        if self.return_spectrogram:
+            mix = self.stft(mix)
+            isolated_sources = self.stft(isolated_sources)
 
         return mix, isolated_sources, idxs_classes
     
@@ -278,7 +320,7 @@ class FSD50KDataset(Dataset):
 
     
     @staticmethod
-    def normalize(X, augmentation = False):
+    def rsm_normalize(x, augmentation=False):
         # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = 0
 
         if augmentation:
@@ -288,9 +330,16 @@ class FSD50KDataset(Dataset):
         else:
             augmentation_gain = 1
         
-        normalize_gain  = torch.sqrt(1/(torch.abs(X)**2).mean()) 
+        normalize_gain  = torch.sqrt(1/(torch.abs(x)**2).mean()) 
        
-        return augmentation_gain * normalize_gain * X
+        return augmentation_gain * normalize_gain * x
+    
+    @staticmethod
+    def peak_normalize(x):
+        factor = 1/torch.max(torch.abs(x))
+        new_x = factor * x
+
+        return new_x, factor
 
 
 if __name__ == '__main__':
@@ -299,10 +348,19 @@ if __name__ == '__main__':
     frame_size = 512
     hop_size = int(frame_size / 2)
     target_class = "Speech"
-    dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset/FSD50K", frame_size, hop_size, target_class, forceCPU=True, return_spectrogram=False)
+    dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset/FSD50K",
+                            frame_size, 
+                            hop_size, 
+                            target_class, 
+                            forceCPU=True, 
+                            return_spectrogram=False)
     print(len(dataset))
 
-    dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=False)
-    for _ in range(100):
-        for mix, isolatedSources, labels in dataloader:
-            pass
+    _, _, label = dataset.get_serialized_sample(10, 1300)
+
+    print(label)
+
+    # dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=False)
+    # for _ in range(100):
+    #     for mix, isolatedSources, labels in dataloader:
+    #         pass

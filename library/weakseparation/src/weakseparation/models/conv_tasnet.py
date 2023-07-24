@@ -196,9 +196,9 @@ class Decoder(nn.Module):
         # self.decoder = nn.ConvTranspose1d(
         #     in_channels, out_channels, kernel_size, kernel_size//2, padding=0, bias=True)
         frame_size = in_channels
-        hop_length = int(frame_size // 2) 
+        self.hop_length = int(frame_size // 2) 
         self.decoder = torchaudio.transforms.InverseSpectrogram(
-            n_fft=frame_size, hop_length=hop_length, window_fn=cuda_sqrt_hann_window
+            n_fft=frame_size, hop_length=self.hop_length, window_fn=cuda_sqrt_hann_window
         )
 
     def forward(self, x):
@@ -257,8 +257,11 @@ class ConvTasNet(pl.LightningModule):
         d = [x*m[i] for i in range(self.num_spks)]
         s = torch.empty((waveform.shape[0], self.num_spks, waveform.shape[1]), device=self.device)
         for i in range(self.num_spks):
-            s[:, i] = self.decoder(d[i]) 
-        
+            pred = self.decoder(d[i])
+            if torch.sum(torch.isnan(pred))>1:
+                pred = torch.zeros_like(pred, requires_grad=True)
+            pred = torch.nn.functional.pad(pred, (0, int(waveform.shape[1]-pred.shape[1])), mode="constant", value=0)
+            s[:, i] = pred
         return s
     
     def training_step(self, batch, batch_idx):
@@ -343,7 +346,9 @@ class ConvTasNet(pl.LightningModule):
 
         isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
 
-        loss, pred = self.compute_loss(isolated_pred, isolated_mix)
+        pred = self.efficient_mixit(isolated_pred, isolated_mix)
+        loss = -1*scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+        # loss, pred = self.compute_loss(isolated_pred, isolated_mix)
         
         # Pytorch si-snr is si-sdr
         snr = signal_noise_ratio(pred, isolated_mix).mean()
@@ -356,7 +361,7 @@ class ConvTasNet(pl.LightningModule):
         return loss
 
     def validation_step_unsupervised(self, batch, batch_idx):
-        mix, isolated_sources, _  = batch
+        mix, isolated_sources, labels  = batch
 
         # Ignore mics for now
         mix = mix[:,0]
@@ -368,24 +373,42 @@ class ConvTasNet(pl.LightningModule):
 
         isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
 
-        loss, pred = self.compute_loss(isolated_pred, isolated_mix)
+        pred = self.efficient_mixit(isolated_pred, isolated_mix)
+        isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)
+        loss = -1*scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+        # loss, pred = self.compute_loss(isolated_pred, isolated_mix)
+        # _, isolated_pred = self.compute_loss(isolated_pred, isolated_sources)
+
         
         # Pytorch si-snr is si-sdr
         snr = signal_noise_ratio(pred, isolated_mix).mean()
+        
+        msi = scale_invariant_signal_distortion_ratio(isolated_pred, isolated_sources)
+        # Get mean without the empty sources (like in Mixit original paper)
+        msi_count = 0
+        msi_nb = 0
+        for i, label in enumerate(labels):
+            for j, l_batch in enumerate(label):
+                if l_batch != "nothing":
+                    msi_count += msi[j, i]
+                    msi_nb +=1
+        msi = msi_count/msi_nb
+
         sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
         
         self.log('val_loss', loss, batch_size=mix.shape[0])
         self.log('val_SNR', snr, batch_size=mix.shape[0])
         self.log('val_SI-SDR', sdr, batch_size=mix.shape[0])
+        self.log('val_MSi', msi, batch_size=mix.shape[0])
 
         return loss
     
     def validation_epoch_end(self, outputs):
         outputs.clear()
 
-        if not self.current_epoch % 50 and self.logger is not None:
-            mix0, isolatedSources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(0)
-            mix1, isolatedSources1, labels1 = self.trainer.datamodule.dataset_val.get_serialized_sample(1)
+        if not self.current_epoch % 100 and self.logger is not None:
+            mix0, isolatedSources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(15, 1300)
+            mix1, isolatedSources1, labels1 = self.trainer.datamodule.dataset_val.get_serialized_sample(10, 1300)
 
             mix = torch.stack((mix0, mix1)).to(self.device)
             isolatedSources = torch.stack((isolatedSources0, isolatedSources1)).to(self.device)
@@ -404,8 +427,11 @@ class ConvTasNet(pl.LightningModule):
 
             if not self.supervised:
                 isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
+                isolated_pred = self.efficient_mixit(isolated_pred, isolatedSources)
+                # _, isolated_pred = self.compute_loss(isolated_pred, isolatedSources)
 
-            loss, pred = self.compute_loss(isolated_pred, target)
+            pred = self.efficient_mixit(isolated_pred, target)
+            # _, pred = self.compute_loss(isolated_pred, target)
 
             preds = pred[0]
             groundTruths = target[0]
@@ -426,8 +452,19 @@ class ConvTasNet(pl.LightningModule):
                 self.logger.log_table(key="results", columns=self.log_columns, data=table)
 
                 isolated_pred = isolated_pred[0]
-                for idx, source in enumerate(isolated_pred):
-                    wandb.log({f"Source{idx}": wandb.Audio(source.cpu().numpy(), sample_rate=16000)})
+                isolatedSources = isolatedSources[0]
+                i = 0
+                table = []
+                for waveform_source, waveform_groundTruth in zip(isolated_pred, isolatedSources):
+                    table.append([
+                        f"{label[i]}",
+                        wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
+                        wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
+                        wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
+                        wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                    ])
+                    i+=1
+                self.logger.log_table(key="isolated results", columns=self.log_columns, data=table)
             else:
                 new_label: list = []
                 new_label.append(label[0])
@@ -480,10 +517,10 @@ class ConvTasNet(pl.LightningModule):
     def prepare_data_for_supervised(self, isolated_sources):
         """
             Args:
-                isolated_sources (Tensor): Batch, Sources, Time 
+                isolated_sources (Tensor): Target signal needs to be the first source (Batch, Sources, Time)
             
             Returns:
-                (Tensor): (Batch, Sources/2, 2, Time), (Batch, Time)
+                (Tensor): (Batch, 2, Time)
         """
 
         additionnal_sources_mix = isolated_sources[:, 1:, ...]
@@ -512,8 +549,22 @@ class ConvTasNet(pl.LightningModule):
     def negative_si_sdr(pred, target):
         return -1*scale_invariant_signal_distortion_ratio(pred, target).mean(-1)
     
+    @staticmethod 
+    def efficient_mixit(pred, target):
+        least_squares_result = torch.linalg.lstsq(pred.transpose(1,2), target.transpose(1,2)).solution.transpose(1,2)
+
+        max_indices = torch.argmax(least_squares_result, dim=1)
+
+        # Create a binary mask where 1 is set at the indices of minimum values, rest to 0
+        mask = torch.zeros_like(least_squares_result)
+        mask.scatter_(1, max_indices.unsqueeze(1), 1)
+
+        mixit_result = torch.bmm(mask, pred)
+
+        return mixit_result
+
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-4, maximize=False)
+        optimizer = optim.Adam(self.parameters(), lr=1e-5, maximize=False)
         return optimizer
 
 if __name__ == "__main__":

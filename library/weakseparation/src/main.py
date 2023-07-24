@@ -24,12 +24,12 @@ if not supervised:
     num_speakers = max_sources
 layers = 2
 hidden_dim = bins*max_sources
-epochs = 3005
+epochs = 4005
 batch_size=16
 num_of_workers=8
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
-    batch_size=16
+    batch_size=32
     num_of_workers=16
     torch.set_float32_matmul_precision('high')
 
@@ -72,6 +72,7 @@ def main(args):
         batch_size=batch_size,
         num_of_workers=num_of_workers,
         return_spectrogram=return_spectrogram,
+        supervised=supervised,
     )
 
     # dm = weakseparation.DataModule(

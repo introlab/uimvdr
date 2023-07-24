@@ -4,7 +4,18 @@ import torch
 from torch.utils.data import DataLoader
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, dataset, data_dir, batch_size, frame_size, hop_size, target_class = None, sample_rate=16000, max_sources=3, num_of_workers=4, return_spectrogram=True):
+    def __init__(self, 
+                 dataset, 
+                 data_dir, 
+                 batch_size, 
+                 frame_size, 
+                 hop_size, 
+                 target_class = None, 
+                 sample_rate=16000, 
+                 max_sources=3, 
+                 num_of_workers=4, 
+                 return_spectrogram=True,
+                 supervised=True):
         super().__init__()
         self.dataset = dataset
         self.data_dir = data_dir
@@ -16,6 +27,7 @@ class DataModule(pl.LightningDataModule):
         self.max_sources = max_sources
         self.return_spectrogram = return_spectrogram
         self.target_class = target_class
+        self.supervised = supervised
 
     def setup(self, stage: str):
         # Assign test dataset for use in dataloader(s)
@@ -31,6 +43,7 @@ class DataModule(pl.LightningDataModule):
                 max_sources=self.max_sources, 
                 forceCPU=True,
                 return_spectrogram = self.return_spectrogram,
+                supervised = self.supervised,
             )
             self.dataset_val = self.dataset(
                 self.data_dir, 
@@ -42,6 +55,7 @@ class DataModule(pl.LightningDataModule):
                 max_sources=self.max_sources, 
                 forceCPU=True,
                 return_spectrogram = self.return_spectrogram,
+                supervised = self.supervised,
             )
             # self.dataset_train, self.dataset_val = torch.utils.data.random_split(dataset_val,
             #                                                         [int(len(
@@ -61,6 +75,7 @@ class DataModule(pl.LightningDataModule):
                 max_sources=self.max_sources,
                 forceCPU=True,
                 return_spectrogram = self.return_spectrogram,
+                supervised = self.supervised,
             )
 
     def train_dataloader(self):
