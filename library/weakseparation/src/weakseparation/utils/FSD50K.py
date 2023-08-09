@@ -11,13 +11,33 @@ from .Windows import sqrt_hann_window
 from torch.utils.data import Dataset
 from scipy import signal
 
+def make_index_dict(label_csv):
+    index_lookup = {}
+    with open(label_csv, 'r') as f:
+        csv_reader = csv.DictReader(f)
+        line_count = 0
+        for row in csv_reader:
+            index_lookup[row['display_name']] = row['index']
+            line_count += 1
+    return index_lookup
+
+def make_name_dict(label_csv):
+    name_lookup = {}
+    with open(label_csv, 'r') as f:
+        csv_reader = csv.DictReader(f)
+        line_count = 0
+        for row in csv_reader:
+            name_lookup[row['index']] = row['display_name']
+            line_count += 1
+    return name_lookup
 
 class FSD50KDataset(Dataset):
     def __init__(self, 
                  dir,
                  frame_size, 
                  hop_size, 
-                 target_class="Bark", 
+                 target_class="Bark",
+                 non_mixing_classes = ["Dog"],
                  type="train", 
                  sample_rate=16000, 
                  max_sources=3, 
@@ -30,7 +50,9 @@ class FSD50KDataset(Dataset):
         self.sample_rate = sample_rate
         self.max_sources = max_sources
         self.target_class = target_class
-        self.gain = 1
+        self.nb_of_seconds = 3
+        self.non_mixing_classes = non_mixing_classes.copy()
+        self.non_mixing_classes.append(target_class)
         self.type = type
         self.rir = rir
         self.return_spectrogram = return_spectrogram
@@ -75,8 +97,9 @@ class FSD50KDataset(Dataset):
                             self.paths_to_target_data.append(row[0]) 
                         else:
                             self.paths_to_data.append(row[0])
-                        list_of_classes = [self.ontology_dict[n]['name'] for n in ids]
-                        self.labels[row[0]] = ' '.join(map(str, list_of_classes))
+                        self.labels[row[0]] = row[1]
+        #Classification
+        self.index_dict = make_index_dict(os.path.join(dir, "FSD50K.ground_truth", "class_labels_indices.csv"))
 
         # List of target classe(s)
         target_id = name_to_id[self.target_class]
@@ -114,12 +137,20 @@ class FSD50KDataset(Dataset):
         return len(self.paths_to_target_data)
     
     def __getitem__(self, idx):
+        # The 16k samples were generated using sox
+        # os.system('sox ' + basepath + audiofile+' -r 16000 ' + targetpath + audiofile + '> /dev/null 2>&1')
         wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav") 
 
         x, file_sample_rate = torchaudio.load(wav_path)
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
-        x = self.get_right_number_of_samples(x, self.sample_rate, 5, shuffle=True)
+        x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=True)
+
+        # Label for clasification
+        if not self.supervised:
+            classification_label = torch.zeros(200, device=self.device, dtype=torch.float32)
+            for label_str in self.labels[self.paths_to_target_data[idx]].split(','):
+                classification_label[int(self.index_dict[label_str])] = 1.0
 
         if self.rir:
             room = random.randint(0, len(self.rooms)-1)
@@ -128,7 +159,7 @@ class FSD50KDataset(Dataset):
             rir = self.select_rir(source_list, room, array_idx)
             x = self.apply_rir(rir, x[0])[None,0,:]
 
-        mix = self.rsm_normalize(x, True)
+        mix = self.rms_normalize(x, True)
 
         isolated_sources = mix.clone()[None, ...]
 
@@ -141,7 +172,12 @@ class FSD50KDataset(Dataset):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
                     additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
-                    if additionnal_idx_class not in idxs_classes and additionnal_idx_class not in self.list_of_target_classes:
+                    list_of_additionnal_classes = additionnal_idx_class.split(",")
+                    add_idx = True
+                    for cla in self.non_mixing_classes:
+                        if cla in list_of_additionnal_classes:
+                            add_idx = False
+                    if add_idx and additionnal_idx_class not in idxs_classes:
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
@@ -158,14 +194,17 @@ class FSD50KDataset(Dataset):
                 additionnal_x, file_sample_rate = torchaudio.load(wav_path)
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
-                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, 5, shuffle=True)
+                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=True)
 
                 if self.rir:
                     rir = self.select_rir(source_list, room, array_idx)
                     additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
+                              
+                additionnal_x = self.rms_normalize(additionnal_x, True)
 
-                
-                additionnal_x = self.rsm_normalize(additionnal_x, True)
+                if torch.sum(torch.isnan(additionnal_x)):
+                    print(self.paths_to_data[index] + ".wav")
+                    additionnal_x = torch.zeros_like(additionnal_x)
 
                 mix += additionnal_x
 
@@ -184,7 +223,10 @@ class FSD50KDataset(Dataset):
             mix = self.stft(mix)
             isolated_sources = self.stft(isolated_sources)
 
-        return mix, isolated_sources, idxs_classes
+        if not self.supervised:
+            return mix, isolated_sources, idxs_classes, classification_label
+        else:
+            return mix, isolated_sources, idxs_classes
     
     def get_serialized_sample(self, idx, key=1500):
         wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav") 
@@ -192,7 +234,7 @@ class FSD50KDataset(Dataset):
         x, file_sample_rate = torchaudio.load(wav_path)
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
-        x = self.get_right_number_of_samples(x, self.sample_rate, 5, shuffle=False)
+        x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=False)
 
         if self.rir:
             room = 0
@@ -204,7 +246,7 @@ class FSD50KDataset(Dataset):
             rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
             x = self.apply_rir(rir, x[0])[None,0,:]
 
-        mix = self.rsm_normalize(x, False)
+        mix = self.rms_normalize(x, False)
 
         isolated_sources = mix.clone()[None, ...]
 
@@ -217,7 +259,12 @@ class FSD50KDataset(Dataset):
                 while True:
                     additionnal_idx += 1
                     additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
-                    if additionnal_idx_class not in idxs_classes and additionnal_idx_class not in self.list_of_target_classes:
+                    list_of_additionnal_classes = additionnal_idx_class.split(",")
+                    add_idx = True
+                    for cla in self.non_mixing_classes:
+                        if cla in list_of_additionnal_classes:
+                            add_idx = False
+                    if add_idx and additionnal_idx_class not in idxs_classes:
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
@@ -235,7 +282,7 @@ class FSD50KDataset(Dataset):
                 additionnal_x, file_sample_rate = torchaudio.load(wav_path)
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
-                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, 5, shuffle=False)
+                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
 
                 if self.rir:
                     rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[num_of_additionnal+1]][()][:,array_idx:array_idx+5]
@@ -244,7 +291,7 @@ class FSD50KDataset(Dataset):
                     rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
                     additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
 
-                additionnal_x = self.rsm_normalize(additionnal_x, False)
+                additionnal_x = self.rms_normalize(additionnal_x, False)
                 
                 mix += additionnal_x
 
@@ -320,7 +367,7 @@ class FSD50KDataset(Dataset):
 
     
     @staticmethod
-    def rsm_normalize(x, augmentation=False):
+    def rms_normalize(x, augmentation=False):
         # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = 0
 
         if augmentation:
@@ -347,7 +394,7 @@ if __name__ == '__main__':
 
     frame_size = 512
     hop_size = int(frame_size / 2)
-    target_class = "Speech"
+    target_class = "Bark"
     dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset/FSD50K",
                             frame_size, 
                             hop_size, 
@@ -356,11 +403,11 @@ if __name__ == '__main__':
                             return_spectrogram=False)
     print(len(dataset))
 
-    _, _, label = dataset.get_serialized_sample(10, 1300)
+    # _, _, label = dataset.get_serialized_sample(10, 1300)
 
-    print(label)
+    # print(label)
 
-    # dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=False)
-    # for _ in range(100):
-    #     for mix, isolatedSources, labels in dataloader:
-    #         pass
+    dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=False)
+    for _ in range(100):
+        for mix, isolatedSources, labels in dataloader:
+            pass

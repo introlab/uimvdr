@@ -17,9 +17,11 @@ import torchaudio
 import pytorch_lightning as pl
 import wandb
 import numpy as np
+import random
 
 from ..utils.Windows import cuda_sqrt_hann_window
 from ..utils.PlotUtils import plot_spectrogram_from_waveform
+from .efficient_net import EffNetAttention
 from asteroid.losses import MixITLossWrapper, multisrc_neg_sisdr, multisrc_mse
 from torchmetrics.functional.audio import signal_noise_ratio, scale_invariant_signal_distortion_ratio
 
@@ -215,11 +217,16 @@ class ConvTasNet(pl.LightningModule):
                  P=3,
                  X=8,
                  R=3,
+                 classi_percent=0.5,
+                 alpha=1,
+                 beta=1,
+                 delta=0.5,
                  norm="gLN",
                  num_spks=2,
                  activate="relu",
                  causal=False,
-                 supervised=True
+                 supervised=True,
+                 learning_rate=1e-4
                  ):
         super(ConvTasNet, self).__init__()
         # -----------------------model-----------------------
@@ -239,8 +246,26 @@ class ConvTasNet(pl.LightningModule):
         self.num_spks = num_spks
         self.supervised = supervised
         self.mixit_loss = MixITLossWrapper(self.negative_si_sdr, generalized=False)
+        self.learning_rate = learning_rate
         self.epsilon = torch.finfo(torch.float).eps
         self.log_columns = ["class", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
+        self.delta = delta
+
+        # Classification
+        self.classi_percentage = classi_percent
+        if classi_percent > 0:
+            sd = torch.load('/home/jacob/dev/weakseparation/library/weakseparation/src/best_models/fsd_mdl_wa.pth', map_location=self.device)
+            self.classi_model = EffNetAttention(label_dim=200, b=2, pretrain=False, head_num=4)
+            self.classi_model = torch.nn.DataParallel(self.classi_model)
+            self.classi_model.load_state_dict(sd, strict=False)
+            self.classi_model.eval()
+            self.classi_epsilon = 1e-7
+            self.classi_audio_conf = {'num_mel_bins': 128, 'target_length': 3000, 'freqm': 0, 'timem': 0, 'mixup': 0,
+                                    'dataset': "FSD50K", 'mode': 'evaluation', 'mean': -4.6476,
+                                    'std': 4.5699, 'noise': False}
+            self.classi_loss_fnct = torch.nn.BCELoss()
+            self.alpha = alpha
+            self.beta = beta
 
         self.save_hyperparameters()
 
@@ -334,7 +359,7 @@ class ConvTasNet(pl.LightningModule):
         return loss
     
     def training_step_unsupervised(self, batch, batch_idx):
-        mix, isolated_sources, _  = batch
+        mix, isolated_sources, _, classi_labels = batch
 
         # Ignore mics for now
         mix = mix[:,0]
@@ -346,22 +371,76 @@ class ConvTasNet(pl.LightningModule):
 
         isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
 
-        pred = self.efficient_mixit(isolated_pred, isolated_mix)
+        # pred = self.efficient_mixit(isolated_pred, isolated_mix)
+
+        least_squares_result = torch.linalg.lstsq(isolated_pred.transpose(1,2), isolated_mix.transpose(1,2)).solution.transpose(1,2)
+
+        max_indices = torch.argmax(least_squares_result, dim=1)
+
+        # Create a binary mask where 1 is set at the indices of minimum values, rest to 0
+        mask = torch.zeros_like(least_squares_result)
+        mask.scatter_(1, max_indices.unsqueeze(1), 1)
+
+        #Forcing target
+        mask[..., 0, 0] = 1
+        mask[..., 1, 0] = 0
+
+        pred = torch.bmm(mask, isolated_pred)
+
+        # ground_truth_permutation = torch.zeros_like(target_permutation)
+        # Target should always be in first mixture
+        # ground_truth_permutation[..., 0] = 1
+
+        # permutation_loss = self.classi_loss_fnct(target_permutation, ground_truth_permutation)
+
         loss = -1*scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
-        # loss, pred = self.compute_loss(isolated_pred, isolated_mix)
+
+        # Classification
+        if random.random()<self.classi_percentage:
+            # Need to manually clear classification model grad because not in optimzer and lightning calls optimizer.grad
+            self.classi_model.zero_grad()
+
+            # isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)[:2]
+            # source = isolated_pred[:, 0]
+            target_pred = isolated_pred[:2].transpose(0,1)
+            for idx, source in enumerate(target_pred):
+                fbank_target = torch.zeros(source.shape[0], self.classi_audio_conf["target_length"], self.classi_audio_conf["num_mel_bins"])
+                for i, waveform in enumerate(source):
+                    fbank_target[i] = self.wav2fbank(waveform[None, ...])
+                prediction = self.classi_model(fbank_target)
+                prediction = torch.clamp(prediction, self.classi_epsilon, 1. - self.classi_epsilon)
+
+                if idx>=1:
+                    # indices = torch.nonzero(classi_labels == 1, as_tuple=False).to(torch.long)
+                    # This might not work for speech
+                    # prediction = prediction[indices[:, 0], indices[:, 1]].reshape(source.shape[0], int(torch.sum(classi_labels[0] == 1)))
+                    # Just to test for now:
+                    # Bark and Dog
+                    indices = torch.tensor([7,59], dtype=torch.long)
+                    prediction = prediction[:, indices]
+                    label_ground_truth = torch.zeros_like(prediction, dtype=torch.float32)
+                    classi_loss += self.beta*self.classi_loss_fnct(prediction, label_ground_truth)
+                else:
+                    classi_loss = self.classi_loss_fnct(prediction, classi_labels[:2])
+
+            classi_loss = self.alpha*classi_loss
+            self.log('train_classi_loss', classi_loss)
+            # classi_loss = torch.clamp(classi_loss, max=30)
+            loss = loss + classi_loss
         
-        # Pytorch si-snr is si-sdr
-        snr = signal_noise_ratio(pred, isolated_mix).mean()
-        sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+        with torch.no_grad():
+            # Pytorch si-snr is si-sdr
+            snr = signal_noise_ratio(pred, isolated_mix).mean()
+            sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
         
-        self.log("train_loss", loss, batch_size=mix.shape[0])
-        self.log('train_SNR', snr, batch_size=mix.shape[0])
-        self.log('train_SI-SDR', sdr, batch_size=mix.shape[0])
+            self.log('train_SNR', snr, batch_size=mix.shape[0])
+            self.log('train_SI-SDR', sdr, batch_size=mix.shape[0])
+            self.log("train_loss", loss, batch_size=mix.shape[0])
 
         return loss
 
     def validation_step_unsupervised(self, batch, batch_idx):
-        mix, isolated_sources, labels  = batch
+        mix, isolated_sources, labels, _  = batch
 
         # Ignore mics for now
         mix = mix[:,0]
@@ -374,12 +453,13 @@ class ConvTasNet(pl.LightningModule):
         isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
 
         pred = self.efficient_mixit(isolated_pred, isolated_mix)
-        isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)
+        target_si_sdr = scale_invariant_signal_distortion_ratio(isolated_pred[:,0], isolated_sources[:,0]).mean()
+        isolated_pred, permutation_loss = self.efficient_mixit(isolated_pred, isolated_sources, True)
+        permutation_loss = torch.sum(permutation_loss[..., 1:])
         loss = -1*scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
         # loss, pred = self.compute_loss(isolated_pred, isolated_mix)
         # _, isolated_pred = self.compute_loss(isolated_pred, isolated_sources)
 
-        
         # Pytorch si-snr is si-sdr
         snr = signal_noise_ratio(pred, isolated_mix).mean()
         
@@ -395,11 +475,13 @@ class ConvTasNet(pl.LightningModule):
         msi = msi_count/msi_nb
 
         sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
-        
+
+        self.log('val_permutation_loss', permutation_loss, batch_size=mix.shape[0])
         self.log('val_loss', loss, batch_size=mix.shape[0])
         self.log('val_SNR', snr, batch_size=mix.shape[0])
         self.log('val_SI-SDR', sdr, batch_size=mix.shape[0])
         self.log('val_MSi', msi, batch_size=mix.shape[0])
+        self.log('val_target_SI-SDR', target_si_sdr, batch_size=mix.shape[0])
 
         return loss
     
@@ -483,6 +565,8 @@ class ConvTasNet(pl.LightningModule):
                     i+=1
                 self.logger.log_table(key="results", columns=self.log_columns, data=table)
 
+            wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=16000)})
+
         return
     
     def mixture_consistency_projection(self, pred, mix):
@@ -544,13 +628,35 @@ class ConvTasNet(pl.LightningModule):
         new_pred = self.mixit_loss.reorder_source(pred, target, min_idx, parts)
 
         return loss, new_pred
+    
+    def wav2fbank(self, wave):
+        waveform = wave - wave.mean()
+        fbank = torchaudio.compliance.kaldi.fbank(waveform, htk_compat=True, sample_frequency=16000, use_energy=False,
+                                                    window_type='hanning', num_mel_bins=self.classi_audio_conf["num_mel_bins"], dither=0.0, frame_shift=10)
+
+        target_length = self.classi_audio_conf["target_length"]
+        n_frames = fbank.shape[0]
+
+        p = target_length - n_frames
+
+        # cut and pad
+        if p > 0:
+            m = torch.nn.ZeroPad2d((0, 0, 0, p))
+            fbank = m(fbank)
+        elif p < 0:
+            fbank = fbank[0:target_length, :]
+
+        #Normalization
+        fbank = (fbank - self.classi_audio_conf["mean"]) / self.classi_audio_conf["std"]
+
+        return fbank
 
     @staticmethod
     def negative_si_sdr(pred, target):
         return -1*scale_invariant_signal_distortion_ratio(pred, target).mean(-1)
     
     @staticmethod 
-    def efficient_mixit(pred, target):
+    def efficient_mixit(pred, target, return_target_permutation = False):
         least_squares_result = torch.linalg.lstsq(pred.transpose(1,2), target.transpose(1,2)).solution.transpose(1,2)
 
         max_indices = torch.argmax(least_squares_result, dim=1)
@@ -561,10 +667,21 @@ class ConvTasNet(pl.LightningModule):
 
         mixit_result = torch.bmm(mask, pred)
 
-        return mixit_result
+        if not return_target_permutation:
+            return mixit_result
+        else:
+            return mixit_result, mask[..., 0]
 
+    def alpha_ascent(self, start, end):
+        # return start + ((start - end) * (self.current_epoch / 1000))
+        return -end*1.001**(-1*self.current_epoch) + (end+start)
+    
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-5, maximize=False)
+        params_to_optimize = [param for name, param in self.named_parameters() if name.split(".")[0] != "classi_model"]
+        optimizer = optim.Adam(params_to_optimize, lr=self.learning_rate, maximize=False)
+        # optimizer = optim.SGD(params_to_optimize, lr=self.learning_rate, maximize=False)
+        # scheduler = optim.lr_scheduler.StepLR(optimizer, 100, 0.9)
+        # return [optimizer], [scheduler]
         return optimizer
 
 if __name__ == "__main__":

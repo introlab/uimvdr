@@ -1,8 +1,8 @@
 import torchaudio
 import os
 
-data_folder = "/home/jacob/Dev/weakseparation/library/dataset/ws_custom/2008/16sounds"
-separated_folder = "/home/jacob/Dev/weakseparation/library/dataset/ws_custom/2008_separated/16sounds"
+data_folder = "/home/jacob/dev/weakseparation/library/dataset/Custom/home/respeaker"
+separated_folder = "/home/jacob/dev/weakseparation/library/dataset/Custom/home_separated/respeaker"
 nb_of_seconds = 5
 nb_of_pause = 2
 respeaker_delay = 1
@@ -19,15 +19,15 @@ def main():
                     file_path = os.path.join(dirpath, dir, f)
                     waveform, sample_rate =  torchaudio.load(file_path)
 
-                    current_sample = int(sounds_delay*sample_rate)
+                    current_sample = int(respeaker_delay*sample_rate)
                     samples_in_recording = nb_of_seconds*sample_rate
                     samples_in_between = nb_of_pause*sample_rate
 
                     while name_increment < nb_of_files:
                         if f[:-4] == 'chirp':
-                            audio = waveform[:, current_sample:current_sample+(60*sample_rate)]
+                            audio = waveform[1:, current_sample:current_sample+(60*sample_rate)]
                         else:
-                            audio = waveform[:, current_sample:current_sample+samples_in_recording]
+                            audio = waveform[1:, current_sample:current_sample+samples_in_recording]
 
 
                         current_sample += samples_in_recording+samples_in_between

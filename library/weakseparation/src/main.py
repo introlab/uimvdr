@@ -5,14 +5,16 @@ import pytorch_lightning as pl
 import torchaudio
 import torch
 
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
 
 target_class = "Bark"
+non_mixing_classes = ["Dog"]
 sample_rate = 16000
 supervised = False
 return_spectrogram = False
 seed = 42
+learning_rate = 1e-4
 frame_size = 1024
 bins = int(frame_size / 2) + 1
 hop_size = int(frame_size / 2)
@@ -27,9 +29,13 @@ hidden_dim = bins*max_sources
 epochs = 4005
 batch_size=16
 num_of_workers=8
+alpha = 1
+beta = 1
+delta = 0.5
+classification_percentage = 1
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
-    batch_size=32
+    batch_size=8
     num_of_workers=16
     torch.set_float32_matmul_precision('high')
 
@@ -39,9 +45,9 @@ def main(args):
 
     # trainer.checkpoint_callback.best_model_path
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_SI-SDR',
+        monitor='val_target_SI-SDR',
         mode = 'max',
-        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_SI-SDR:.3f}'
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{target_SI-SDR:.3f}'
     )
 
     if args.log:
@@ -65,6 +71,7 @@ def main(args):
         weakseparation.FSD50K.FSD50KDataset,
         "/home/jacob/dev/weakseparation/library/dataset/FSD50K",
         target_class = target_class,
+        non_mixing_classes = non_mixing_classes,
         frame_size = frame_size,
         hop_size = hop_size,
         sample_rate=sample_rate,
@@ -93,7 +100,18 @@ def main(args):
     # model = weakseparation.UNetMixIT(2, max_sources, mics, supervised=supervised)
     # model = weakseparation.RNN.GRU(input_size=514, hidden_size=256, num_layers=4, mics=1, sources=max_sources)
     # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
-    model = weakseparation.ConvTasNet(N=frame_size, H=bins, activate="softmax", num_spks=num_speakers, supervised=supervised)
+    model = weakseparation.ConvTasNet(
+        N=frame_size, 
+        H=bins, 
+        activate="softmax", 
+        num_spks=num_speakers, 
+        supervised=supervised,
+        alpha=alpha,
+        beta=beta,
+        delta=delta,
+        classi_percent=classification_percentage,
+        learning_rate=learning_rate
+    )
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator='gpu',

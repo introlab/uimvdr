@@ -10,7 +10,8 @@ class DataModule(pl.LightningDataModule):
                  batch_size, 
                  frame_size, 
                  hop_size, 
-                 target_class = None, 
+                 target_class = None,
+                 non_mixing_classes = None,
                  sample_rate=16000, 
                  max_sources=3, 
                  num_of_workers=4, 
@@ -27,6 +28,7 @@ class DataModule(pl.LightningDataModule):
         self.max_sources = max_sources
         self.return_spectrogram = return_spectrogram
         self.target_class = target_class
+        self.non_mixing_classes = non_mixing_classes
         self.supervised = supervised
 
     def setup(self, stage: str):
@@ -39,6 +41,7 @@ class DataModule(pl.LightningDataModule):
                 self.hop_size,
                 type="train",
                 target_class = self.target_class,
+                non_mixing_classes = self.non_mixing_classes,
                 sample_rate=self.sample_rate,
                 max_sources=self.max_sources, 
                 forceCPU=True,
@@ -50,7 +53,8 @@ class DataModule(pl.LightningDataModule):
                 self.frame_size, 
                 self.hop_size, 
                 type="val",
-                target_class = self.target_class, 
+                target_class = self.target_class,
+                non_mixing_classes = self.non_mixing_classes,
                 sample_rate=self.sample_rate,
                 max_sources=self.max_sources, 
                 forceCPU=True,
@@ -71,6 +75,7 @@ class DataModule(pl.LightningDataModule):
                 self.hop_size,
                 type="val",
                 target_class = self.target_class,
+                non_mixing_classes = self.non_mixing_classes,
                 sample_rate=self.sample_rate,
                 max_sources=self.max_sources,
                 forceCPU=True,
