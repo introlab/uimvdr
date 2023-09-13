@@ -5,11 +5,12 @@ import pytorch_lightning as pl
 import torchaudio
 import torch
 
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger, CSVLogger
 
 target_class = "Bark"
 non_mixing_classes = ["Dog"]
+# non_mixing_classes = [""]
 sample_rate = 16000
 supervised = False
 return_spectrogram = False
@@ -30,12 +31,12 @@ epochs = 4005
 batch_size=16
 num_of_workers=8
 alpha = 1
-beta = 1
-delta = 0.5
-classification_percentage = 1
+beta = 0.25
+gamma = 1
+classification_percentage = 0
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
-    batch_size=8
+    batch_size=16
     num_of_workers=16
     torch.set_float32_matmul_precision('high')
 
@@ -45,15 +46,15 @@ def main(args):
 
     # trainer.checkpoint_callback.best_model_path
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_target_SI-SDR',
+        monitor='val_target_SI_SDR',
         mode = 'max',
-        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{target_SI-SDR:.3f}'
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDR:.3f}'
     )
 
     if args.log:
         wandb_logger = WandbLogger(project="mc-weak-separation")
     else:
-        wandb_logger = None
+        wandb_logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
 
     # dm = weakseparation.DataModule(
     #     weakseparation.FUSSDataset,
@@ -70,6 +71,8 @@ def main(args):
     dm = weakseparation.DataModule(
         weakseparation.FSD50K.FSD50KDataset,
         "/home/jacob/dev/weakseparation/library/dataset/FSD50K",
+        weakseparation.customDataset.CustomDataset,
+        "/home/jacob/dev/weakseparation/library/dataset/Custom/separated",
         target_class = target_class,
         non_mixing_classes = non_mixing_classes,
         frame_size = frame_size,
@@ -82,24 +85,6 @@ def main(args):
         supervised=supervised,
     )
 
-    # dm = weakseparation.DataModule(
-    #     weakseparation.LibrispeechDataset,
-    #     "/home/jacob/dev/weakseparation/library/dataset/Librispeech",
-    #     frame_size = frame_size,
-    #     hop_size = hop_size,
-    #     sample_rate=sample_rate,
-    #     max_sources=max_sources,
-    #     batch_size=batch_size,
-    #     num_of_workers=num_of_workers,
-    #     return_spectrogram=return_spectrogram,
-    # )
-
-    # model = weakseparation.GRU(bins*mics, hidden_dim, layers, mics, max_sources)
-    # model = weakseparation.ASTTransformer(1, max_sources, mics, supervised=supervised) 
-    # model = weakseparation.SudoRmRf(1, max_sources, mics, supervised=supervised)
-    # model = weakseparation.UNetMixIT(2, max_sources, mics, supervised=supervised)
-    # model = weakseparation.RNN.GRU(input_size=514, hidden_size=256, num_layers=4, mics=1, sources=max_sources)
-    # model = weakseparation.GRU.load_from_checkpoint("/home/jacob/Dev/weakseparation/mc-weak-separation/4rxsy8rj/checkpoints/gru-epoch=00-val_loss=0.00261.ckpt")
     model = weakseparation.ConvTasNet(
         N=frame_size, 
         H=bins, 
@@ -108,7 +93,7 @@ def main(args):
         supervised=supervised,
         alpha=alpha,
         beta=beta,
-        delta=delta,
+        gamma=gamma,
         classi_percent=classification_percentage,
         learning_rate=learning_rate
     )
@@ -118,23 +103,28 @@ def main(args):
         devices=1,
         callbacks=[checkpoint_callback],
         logger=wandb_logger,
-        log_every_n_steps=1
+        deterministic=True,
+        log_every_n_steps=5,
+        gradient_clip_algorithm="value",
+        gradient_clip_val=5
     )
 
     if args.train:
         trainer.fit(model=model, datamodule=dm)
 
     if args.predict:
-        predictions = trainer.predict(model=model, datamodule=dm)
-        predictions = predictions[0][0]
-        istft = torchaudio.transforms.InverseSpectrogram(
-                n_fft=frame_size, hop_length=hop_size, window_fn=weakseparation.sqrt_hann_window
+        if args.predict[-5:] == ".ckpt":
+            print("Starting Testing")
+            model = weakseparation.ConvTasNet.load_from_checkpoint(
+                checkpoint_path=args.predict
             )
-        i = 0
-        for source in predictions:
-            waveform = istft(source)
-            torchaudio.save(f'./output{i}.wav', waveform, sample_rate)
-            i+=1
+            trainer.test(model=model, datamodule=dm)
+
+            print("Ending Testing")
+        else:
+            print("Starting Testing")
+            trainer.test(model=model, datamodule=dm, ckpt_path="best")
+            print("Ending Testing")
 
     if args.log:
         wandb.join()
@@ -152,8 +142,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "-p",
         "--predict",
-        help="If true, will make a prediction and save the result",
-        action="store_true",
+        help="If true, will test the model",
+        nargs="?",
+        default=False,
+        const="best",
     )
     parser.add_argument(
         "-l",

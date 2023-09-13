@@ -167,6 +167,7 @@ class FSD50KDataset(Dataset):
         idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
         for source_nb in range(self.max_sources-1):
             # TODO: set the probability to non-zero
+            # Make sure that there is not nothing in the second mix
             if random.random() >= 0.2 or \
                (not self.supervised and source_nb == int(self.max_sources //2)):
                 while True:
@@ -177,7 +178,7 @@ class FSD50KDataset(Dataset):
                     for cla in self.non_mixing_classes:
                         if cla in list_of_additionnal_classes:
                             add_idx = False
-                    if add_idx and additionnal_idx_class not in idxs_classes:
+                    if add_idx and additionnal_idx_class not in idxs_classes and not additionnal_idx in additionnal_idxs:
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
@@ -264,7 +265,7 @@ class FSD50KDataset(Dataset):
                     for cla in self.non_mixing_classes:
                         if cla in list_of_additionnal_classes:
                             add_idx = False
-                    if add_idx and additionnal_idx_class not in idxs_classes:
+                    if add_idx and additionnal_idx_class not in idxs_classes and not additionnal_idx in additionnal_idxs:
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
@@ -394,7 +395,7 @@ if __name__ == '__main__':
 
     frame_size = 512
     hop_size = int(frame_size / 2)
-    target_class = "Bark"
+    target_class = "Speech"
     dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset/FSD50K",
                             frame_size, 
                             hop_size, 

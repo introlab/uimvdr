@@ -1,17 +1,20 @@
 import pytorch_lightning as pl
+from pytorch_lightning.utilities.types import EVAL_DATALOADERS
 import torch
 
 from torch.utils.data import DataLoader
 
 class DataModule(pl.LightningDataModule):
     def __init__(self, 
-                 dataset, 
-                 data_dir, 
+                 dataset,
+                 data_dir,
+                 test_dataset,
+                 test_data_dir,
                  batch_size, 
                  frame_size, 
                  hop_size, 
-                 target_class = None,
-                 non_mixing_classes = None,
+                 target_class=None,
+                 non_mixing_classes=None,
                  sample_rate=16000, 
                  max_sources=3, 
                  num_of_workers=4, 
@@ -19,6 +22,8 @@ class DataModule(pl.LightningDataModule):
                  supervised=True):
         super().__init__()
         self.dataset = dataset
+        self.test_dataset = test_dataset
+        self.test_data_dir = test_data_dir
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_of_workers = num_of_workers
@@ -40,48 +45,61 @@ class DataModule(pl.LightningDataModule):
                 self.frame_size,
                 self.hop_size,
                 type="train",
-                target_class = self.target_class,
-                non_mixing_classes = self.non_mixing_classes,
+                target_class=self.target_class,
+                non_mixing_classes=self.non_mixing_classes,
                 sample_rate=self.sample_rate,
                 max_sources=self.max_sources, 
                 forceCPU=True,
-                return_spectrogram = self.return_spectrogram,
-                supervised = self.supervised,
+                return_spectrogram=self.return_spectrogram,
+                supervised=self.supervised,
             )
-            self.dataset_val = self.dataset(
-                self.data_dir, 
-                self.frame_size, 
-                self.hop_size, 
-                type="val",
-                target_class = self.target_class,
-                non_mixing_classes = self.non_mixing_classes,
-                sample_rate=self.sample_rate,
-                max_sources=self.max_sources, 
-                forceCPU=True,
-                return_spectrogram = self.return_spectrogram,
-                supervised = self.supervised,
-            )
-            # self.dataset_train, self.dataset_val = torch.utils.data.random_split(dataset_val,
-            #                                                         [int(len(
-            #                                                             dataset_val) * TRAIN_VALIDATION_SPLIT),
-            #                                                         int(len(dataset_val) - int(len(
-            #                                                             dataset_val) * TRAIN_VALIDATION_SPLIT))])
+        self.dataset_val = self.dataset(
+            self.data_dir, 
+            self.frame_size, 
+            self.hop_size, 
+            type="val",
+            target_class=self.target_class,
+            non_mixing_classes=self.non_mixing_classes,
+            sample_rate=self.sample_rate,
+            max_sources=self.max_sources, 
+            forceCPU=True,
+            return_spectrogram=self.return_spectrogram,
+            supervised=self.supervised,
+        )
 
-
-        if stage == "validate":
-            self.dataset_val = self.dataset(
-                self.data_dir,
-                self.frame_size,
-                self.hop_size,
-                type="val",
-                target_class = self.target_class,
-                non_mixing_classes = self.non_mixing_classes,
-                sample_rate=self.sample_rate,
-                max_sources=self.max_sources,
-                forceCPU=True,
-                return_spectrogram = self.return_spectrogram,
-                supervised = self.supervised,
-            )
+        self.dataset_test_respeaker = self.test_dataset(
+            self.test_data_dir, 
+            self.frame_size, 
+            self.hop_size, 
+            target_class=self.target_class,
+            sample_rate=self.sample_rate,
+            max_sources=self.max_sources,
+            supervised=self.supervised,  
+            forceCPU=True, 
+            return_spectrogram=False
+        )
+        self.dataset_test_kinect = self.test_dataset(
+            self.test_data_dir, 
+            self.frame_size, 
+            self.hop_size, 
+            target_class=self.target_class,
+            sample_rate=self.sample_rate,
+            max_sources=self.max_sources,  
+            supervised=self.supervised,  
+            forceCPU=True, 
+            return_spectrogram=False
+        )
+        self.dataset_test_16sounds = self.test_dataset(
+            self.test_data_dir, 
+            self.frame_size, 
+            self.hop_size, 
+            target_class=self.target_class,
+            sample_rate=self.sample_rate,
+            max_sources=self.max_sources,
+            supervised=self.supervised,    
+            forceCPU=True, 
+            return_spectrogram=False
+        )
 
     def train_dataloader(self):
         return DataLoader(
@@ -100,4 +118,28 @@ class DataModule(pl.LightningDataModule):
             shuffle=False,
             persistent_workers=False,
         )
+    
+    def test_dataloader(self):
+        return [DataLoader(
+            self.dataset_test_respeaker,
+            batch_size=self.batch_size,
+            num_workers=self.num_of_workers,
+            shuffle=False,
+            persistent_workers=False,
+        ),
+        DataLoader(
+            self.dataset_test_kinect,
+            batch_size=self.batch_size,
+            num_workers=self.num_of_workers,
+            shuffle=False,
+            persistent_workers=False,
+        ),
+        DataLoader(
+            self.dataset_test_16sounds,
+            batch_size=self.batch_size,
+            num_workers=self.num_of_workers,
+            shuffle=False,
+            persistent_workers=False,
+        )]
+
 

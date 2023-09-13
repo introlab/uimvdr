@@ -18,16 +18,17 @@
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--train"],
+            "args": ["--train", "--predict"],
             "justMyCode": false
         },
         {
             "name": "Test",
             "type": "python",
             "request": "launch",
-            "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/test.py",
+            "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            // "args": [""],
+            // "args": ["--predict", "/home/jacob/dev/weakseparation/library/weakseparation/src/mc-weak-separation/yk4kui0z/checkpoints/convtasnet-epoch=1307-val_loss=-18.94047-val_target_SI_SDR=29.064.ckpt"],
+            "args": ["--log", "--predict", "/home/jacob/dev/weakseparation/library/weakseparation/src/mc-weak-separation/t4o41mo9/checkpoints/convtasnet-epoch=510-val_loss=-6.81267-val_target_SI_SDR=3.450.ckpt"],
             "justMyCode": false
         }
     ]
