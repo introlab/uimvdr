@@ -1,3 +1,4 @@
+import os
 import argparse
 import weakseparation
 import wandb
@@ -24,15 +25,16 @@ max_sources = 2
 num_speakers = 2
 if not supervised:
     max_sources *= 2
-    num_speakers = max_sources
+    num_speakers = 4
 layers = 2
 hidden_dim = bins*max_sources
 epochs = 4005
 batch_size=16
 num_of_workers=8
-alpha = 1
-beta = 0.25
-gamma = 1
+alpha = 0.0 # Classification weigth
+beta = 0.25 # The power of the energy 
+gamma = 0.0 # The weigth of the energy
+kappa = 0.0
 classification_percentage = 0
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
@@ -46,9 +48,9 @@ def main(args):
 
     # trainer.checkpoint_callback.best_model_path
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_target_SI_SDR',
+        monitor='val_MoMi',
         mode = 'max',
-        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDR:.3f}'
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_MoMi:.3f}'
     )
 
     if args.log:
@@ -94,6 +96,7 @@ def main(args):
         alpha=alpha,
         beta=beta,
         gamma=gamma,
+        kappa=kappa,
         classi_percent=classification_percentage,
         learning_rate=learning_rate
     )
@@ -103,7 +106,7 @@ def main(args):
         devices=1,
         callbacks=[checkpoint_callback],
         logger=wandb_logger,
-        deterministic=True,
+        deterministic=False if classification_percentage else True,
         log_every_n_steps=5,
         gradient_clip_algorithm="value",
         gradient_clip_val=5
@@ -113,14 +116,16 @@ def main(args):
         trainer.fit(model=model, datamodule=dm)
 
     if args.predict:
-        if args.predict[-5:] == ".ckpt":
-            print("Starting Testing")
+        if os.path.exists(args.predict):
+            files = [os.path.join(dirpath,f) for (dirpath, dirnames, filenames) in os.walk(args.predict) for f in filenames]
+            print(f"Starting Testing for {files[0]}")
+
             model = weakseparation.ConvTasNet.load_from_checkpoint(
-                checkpoint_path=args.predict
+                checkpoint_path=files[0]
             )
             trainer.test(model=model, datamodule=dm)
 
-            print("Ending Testing")
+            print(f"Ending Testing for {files[0]}")
         else:
             print("Starting Testing")
             trainer.test(model=model, datamodule=dm, ckpt_path="best")

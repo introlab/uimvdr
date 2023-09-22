@@ -7,9 +7,6 @@
 @Version     :1.0
 '''
 
-import os
-from typing import Any, List, Optional, Union
-from pytorch_lightning.utilities.types import EPOCH_OUTPUT, STEP_OUTPUT
 import torch
 import torch.nn as nn
 from torch import optim
@@ -19,11 +16,12 @@ import pytorch_lightning as pl
 import wandb
 import numpy as np
 import random
+import kissdsp.spatial as sp
+import kissdsp.beamformer as bf
 
 from ..utils.Windows import cuda_sqrt_hann_window
 from ..utils.PlotUtils import plot_spectrogram_from_waveform
 from .efficient_net import EffNetAttention
-from asteroid.losses import MixITLossWrapper, multisrc_neg_sisdr, multisrc_mse
 from torchmetrics.functional.audio import signal_noise_ratio, scale_invariant_signal_distortion_ratio
 from pytorch_lightning.loggers import WandbLogger
 
@@ -223,6 +221,7 @@ class ConvTasNet(pl.LightningModule):
                  alpha=1,
                  beta=1,
                  gamma=0.5,
+                 kappa=0.001,
                  norm="gLN",
                  num_spks=2,
                  activate="relu",
@@ -247,12 +246,12 @@ class ConvTasNet(pl.LightningModule):
         self.non_linear = supported_nonlinear[activate]
         self.num_spks = num_spks
         self.supervised = supervised
-        self.mixit_loss = MixITLossWrapper(self.negative_si_sdr, generalized=False)
         self.learning_rate = learning_rate
         self.epsilon = torch.finfo(torch.float).eps
-        self.log_columns = ["class", "Si-SDR", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
+        self.log_columns = ["class", "Si-SDRi", "pred spectrogram", "ground truth spectrogram", "pred audio", "ground truth audio"]
         self.gamma = gamma
         self.beta = beta
+        self.kappa = kappa
 
         # Classification
         self.classi_percentage = classi_percent
@@ -271,7 +270,7 @@ class ConvTasNet(pl.LightningModule):
 
         self.save_hyperparameters()
 
-    def forward(self, waveform, return_target_spectrogram=False):
+    def forward(self, waveform, return_target_spectrogram=False, return_mask=False):
         x, w = self.encoder(waveform)
         w = self.separation(w)
         m = self.mask(w)
@@ -283,10 +282,17 @@ class ConvTasNet(pl.LightningModule):
             pred = self.decoder(d[i])
             pred = torch.nn.functional.pad(pred, (0, int(waveform.shape[1]-pred.shape[1])), mode="constant", value=0)
             s[:, i] = pred
-        if not return_target_spectrogram:
-            return s
-        else: 
+
+        s = self.mixture_consistency_projection(s, waveform)
+
+        if return_target_spectrogram and not return_mask:
             return s, torch.abs(x)*m[0]
+        elif not return_target_spectrogram and return_mask: 
+            return s, m[0]
+        elif return_target_spectrogram and return_mask: 
+            return s, torch.abs(x)*m[0], m[0]
+        else:
+            return s
     
     def training_step(self, batch, batch_idx):
         if self.supervised:
@@ -370,35 +376,14 @@ class ConvTasNet(pl.LightningModule):
         mix = mix[:,0]
         isolated_sources = isolated_sources[:,:,0]
 
-        isolated_mix, mix = self.prepare_data_for_unsupervised(isolated_sources)
+        isolated_mix = self.prepare_data_for_unsupervised(isolated_sources)
 
         isolated_pred, target_pred_spectrogram = self(mix, return_target_spectrogram=True)
 
-        isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
+        # Efficient mixit with forcing target
+        pred = self.efficient_mixit(isolated_pred, isolated_mix, force_target=True)
 
-        # pred = self.efficient_mixit(isolated_pred, isolated_mix)
-
-        least_squares_result = torch.linalg.lstsq(isolated_pred.transpose(1,2), isolated_mix.transpose(1,2)).solution.transpose(1,2)
-
-        max_indices = torch.argmax(least_squares_result, dim=1)
-
-        # Create a binary mask where 1 is set at the indices of minimum values, rest to 0
-        mask = torch.zeros_like(least_squares_result)
-        mask.scatter_(1, max_indices.unsqueeze(1), 1)
-
-        # Forcing target
-        mask[..., 0, 0] = 1
-        mask[..., 1, 0] = 0
-
-        pred = torch.bmm(mask, isolated_pred)
-
-        # ground_truth_permutation = torch.zeros_like(mask[..., 0])
-        # # Target should always be in first mixture
-        # ground_truth_permutation[..., 0] = 1
-
-        # permutation_loss = self.delta * self.classi_loss_fnct(mask[..., 0], ground_truth_permutation)
-
-        loss = -1*scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+        loss = self.negative_SNR(pred, isolated_mix)
 
         # Classification
         classi_loss = 0.0
@@ -428,16 +413,17 @@ class ConvTasNet(pl.LightningModule):
             classi_loss = self.alpha*classi_loss
             self.log('train_classi_loss', classi_loss)
 
+        rms = torch.square(torch.mean(isolated_pred**2, dim=-1))
+        sparcity_loss = self.kappa * rms.mean()/(rms**2).sum()
         target_energy = self.gamma * torch.mean((target_pred_spectrogram+self.epsilon)**self.beta)
-        loss = loss + classi_loss + target_energy
+        loss = loss + classi_loss + target_energy + sparcity_loss
         
         with torch.no_grad():
-            # Pytorch si-snr is si-sdr
-            snr = signal_noise_ratio(pred, isolated_mix).mean()
-            sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+            repeated_mix = mix[:, None, :]
+            repeated_mix = repeated_mix.expand(-1, isolated_mix.shape[1], -1)
+            si_sdri = (scale_invariant_signal_distortion_ratio(pred, isolated_mix) - scale_invariant_signal_distortion_ratio(repeated_mix, isolated_mix)).mean()
         
-            self.log('train_SNR', snr, batch_size=mix.shape[0])
-            self.log('train_SI_SDR', sdr, batch_size=mix.shape[0])
+            self.log('train_MoMi', si_sdri, batch_size=mix.shape[0])
             self.log("train_loss", loss, batch_size=mix.shape[0])
 
         return loss
@@ -449,22 +435,19 @@ class ConvTasNet(pl.LightningModule):
         mix = mix[:,0]
         isolated_sources = isolated_sources[:,:,0]
 
-        isolated_mix, mix = self.prepare_data_for_unsupervised(isolated_sources)
+        isolated_mix = self.prepare_data_for_unsupervised(isolated_sources)
 
         isolated_pred = self(mix)
 
-        isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
+        pred = self.efficient_mixit(isolated_pred, isolated_mix, force_target=True)
 
-        pred = self.efficient_mixit(isolated_pred, isolated_mix)
+        loss = self.negative_SNR(pred, isolated_mix)
+
+        # Target SI_SDRi
         target_si_sdr = scale_invariant_signal_distortion_ratio(isolated_pred[:,0], isolated_sources[:,0]).mean()
-        isolated_pred, permutation_loss = self.efficient_mixit(isolated_pred, isolated_sources, True)
-        permutation_loss = torch.mean(permutation_loss[..., 1:])
-        loss = -1*scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
-        # loss, pred = self.compute_loss(isolated_pred, isolated_mix)
-        # _, isolated_pred = self.compute_loss(isolated_pred, isolated_sources)
+        target_si_sdri = target_si_sdr - scale_invariant_signal_distortion_ratio(mix, isolated_sources[:,0]).mean()
 
-        # Pytorch si-snr is si-sdr
-        snr = signal_noise_ratio(pred, isolated_mix).mean()
+        isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
         
         msi = scale_invariant_signal_distortion_ratio(isolated_pred, isolated_sources)
         # Get mean without the empty sources (like in Mixit original paper)
@@ -472,84 +455,216 @@ class ConvTasNet(pl.LightningModule):
         msi_nb = 0
         for i, label in enumerate(labels):
             for j, l_batch in enumerate(label):
-                if l_batch != "nothing":
-                    msi_count += msi[j, i]
+                if l_batch != "Nothing":
+                    msi_count += msi[j, i] - scale_invariant_signal_distortion_ratio(mix[j], isolated_sources[j, i])
                     msi_nb +=1
         msi = msi_count/msi_nb
 
-        sdr = scale_invariant_signal_distortion_ratio(pred, isolated_mix).mean()
+        repeated_mix = mix[:, None, :]
+        repeated_mix = repeated_mix.expand(-1, isolated_mix.shape[1], -1)
+        si_sdri = (scale_invariant_signal_distortion_ratio(pred, isolated_mix) - scale_invariant_signal_distortion_ratio(repeated_mix, isolated_mix)).mean()
 
-        self.log('val_permutation_loss', permutation_loss, batch_size=mix.shape[0])
         self.log('val_loss', loss, batch_size=mix.shape[0])
-        self.log('val_SNR', snr, batch_size=mix.shape[0])
-        self.log('val_SI_SDR', sdr, batch_size=mix.shape[0])
+        self.log('val_MoMi', si_sdri, batch_size=mix.shape[0])
         self.log('val_MSi', msi, batch_size=mix.shape[0])
-        self.log('val_target_SI_SDR', target_si_sdr, batch_size=mix.shape[0])
+        self.log('val_target_SI_SDRi', target_si_sdri, batch_size=mix.shape[0])
 
         return loss
     
     def test_step(self, batch, batch_idx, dataloader_idx=0):
-        mix, isolated_sources, labels = batch
+        multimic_mix, isolated_sources, labels = batch
 
         # Ignore mics for now
-        mix = mix[:,0]
+        mix = multimic_mix[:,0]
         isolated_sources = isolated_sources[:,:,0]
 
         if not self.supervised:
-            target, mix = self.prepare_data_for_unsupervised(isolated_sources)
+            target = self.prepare_data_for_unsupervised(isolated_sources)
         else:
             target = self.prepare_data_for_supervised(isolated_sources)
 
-        isolated_pred, target_pred_mask = self(mix, return_target_spectrogram=True)
+        isolated_pred, pred_mask = self(mix, return_mask=True)
 
-        if not self.supervised:
-            isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
+        batch_stft = self.encoder.encoder(multimic_mix).transpose(0,1)
+        batch_target_stft = self.encoder.encoder(isolated_sources[:,0])
+        oracle_mask = torch.abs(batch_target_stft) / (torch.abs(batch_target_stft) + torch.abs(batch_stft[0]-batch_target_stft))
+        batch_pred_stft = batch_stft * pred_mask
+        batch_noise_stft = batch_stft - batch_pred_stft
+        batch_oracle_stft = batch_stft * oracle_mask
+        batch_oracle_noise_stft = batch_stft - batch_oracle_stft
+        batch_pred_stft = batch_pred_stft.permute(1,0,3,2).cpu().numpy()
+        batch_noise_stft = batch_noise_stft.permute(1,0,3,2).cpu().numpy()
+        batch_oracle_stft = batch_oracle_stft.permute(1,0,3,2).cpu().numpy()
+        batch_oracle_noise_stft = batch_oracle_noise_stft.permute(1,0,3,2).cpu().numpy()
+        batch_stft = batch_stft.permute(1,0,3,2).cpu().numpy()
+
+        batch_beamformed_pred = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
+        batch_beamformed_oracle = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
+        batch_oracle = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
+        for i, (pred_stft, noise_stft, oracle_stft, oracle_noise_stft, stft) in enumerate(zip(batch_pred_stft, batch_noise_stft, batch_oracle_stft, batch_oracle_noise_stft, batch_stft)):
+            pred_scm = sp.scm(sp.xspec(pred_stft))
+            noise_scm = sp.scm(sp.xspec(noise_stft))
+            mvdr = bf.mvdr(pred_scm, noise_scm)
+            beamformed_pred = bf.beam(stft, mvdr)
+            batch_beamformed_pred[i] = beamformed_pred
+
+            oracle_scm = sp.scm(sp.xspec(oracle_stft))
+            oracle_noise_scm = sp.scm(sp.xspec(oracle_noise_stft))
+            oracle_mvdr = bf.mvdr(oracle_scm, oracle_noise_scm)
+            oracle_beamformed_pred = bf.beam(stft, oracle_mvdr)
+            batch_beamformed_oracle[i] = oracle_beamformed_pred
+            batch_oracle[i] = oracle_stft[0]
+
+        batch_beamformed_pred = torch.tensor(batch_beamformed_pred, device=self.device)
+        batch_beamformed_pred = batch_beamformed_pred.transpose(1,2)
+        batch_beamformed_oracle = torch.tensor(batch_beamformed_oracle, device=self.device)
+        batch_beamformed_oracle = batch_beamformed_oracle.transpose(1,2)
+        batch_oracle = torch.tensor(batch_oracle, device=self.device)
+        batch_oracle = batch_oracle.transpose(1,2)
+        
+        # Post mask
+        pred_mask[pred_mask<0.3] = 0.3
+        batch_beamformed_pred = batch_beamformed_pred*pred_mask
+
+        batch_beamformed_pred = self.decoder.decoder(batch_beamformed_pred)
+        batch_beamformed_pred = torch.nn.functional.pad(batch_beamformed_pred, (0, int(mix.shape[-1]-batch_beamformed_pred.shape[-1])), mode="constant", value=0)
+        batch_beamformed_oracle = self.decoder.decoder(batch_beamformed_oracle)
+        batch_beamformed_oracle = torch.nn.functional.pad(batch_beamformed_oracle, (0, int(mix.shape[-1]-batch_beamformed_oracle.shape[-1])), mode="constant", value=0)
+        batch_oracle = self.decoder.decoder(batch_oracle)
+        batch_oracle = torch.nn.functional.pad(batch_oracle, (0, int(mix.shape[-1]-batch_oracle.shape[-1])), mode="constant", value=0)
 
         pred = self.efficient_mixit(isolated_pred, target)
 
-        sdr = scale_invariant_signal_distortion_ratio(pred, target).mean()
+        repeated_mix = mix[:, None, :]
+        repeated_mix = repeated_mix.expand(-1, target.shape[1], -1)
+        si_sdri = (scale_invariant_signal_distortion_ratio(pred, target) - scale_invariant_signal_distortion_ratio(repeated_mix, target)).mean()
 
         if not self.supervised:
             target_si_sdr = scale_invariant_signal_distortion_ratio(isolated_pred[:,0], isolated_sources[:,0]).mean()
-            _, orig_permutation_loss = self.efficient_mixit(isolated_pred, isolated_sources, True)
-            permutation_loss = torch.mean(orig_permutation_loss[..., 1:])
+            mix_si_sdr = scale_invariant_signal_distortion_ratio(mix, isolated_sources[:,0]).mean()
+            target_si_sdri = target_si_sdr - mix_si_sdr
+
+            oracle_si_sdr = scale_invariant_signal_distortion_ratio(batch_oracle, isolated_sources[:,0]).mean()
+            oracle_si_sdri = oracle_si_sdr - mix_si_sdr
+
+            beam_target_si_sdr = scale_invariant_signal_distortion_ratio(batch_beamformed_pred, isolated_sources[:,0]).mean()
+            beam_target_si_sdri = beam_target_si_sdr - mix_si_sdr
+
+            beam_oracle_si_sdr = scale_invariant_signal_distortion_ratio(batch_beamformed_oracle, isolated_sources[:,0]).mean()
+            beam_oracle_si_sdri = beam_oracle_si_sdr - mix_si_sdr
+
+            isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
+
+            msi = scale_invariant_signal_distortion_ratio(isolated_pred, isolated_sources)
+            # Get mean without the empty sources (like in Mixit original paper)
+            msi_count = 0
+            msi_nb = 0
+            for i, label in enumerate(labels):
+                for j, l_batch in enumerate(label):
+                    if l_batch != "Nothing":
+                        msi_count += msi[j, i] - scale_invariant_signal_distortion_ratio(mix[j], isolated_sources[j, i])
+                        msi_nb +=1
+            msi = msi_count/msi_nb
 
             self.log_dict({
-                "test_si_sdr" : sdr,
-                "test_target_si_sdr" : target_si_sdr,
-                "permutation_loss" : permutation_loss,
+                "test_MoMi" : si_sdri,
+                "test_target_si_sdri" : target_si_sdri,
+                "test_oracle_si_sdri" : oracle_si_sdri,
+                "test_beam_target_si_sdri" : beam_target_si_sdri,
+                "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,
+                "test_msi" : msi,
             }, batch_size=mix.shape[0])
         else:
             isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)
+            # TODO: Verify that the metrics are good and computed on the isolated sources
             target_si_sdr = scale_invariant_signal_distortion_ratio(isolated_pred[:,0], isolated_sources[:,0]).mean()
+            target_si_sdri = target_si_sdr - scale_invariant_signal_distortion_ratio(mix, isolated_sources[:,0]).mean()
+            msi = scale_invariant_signal_distortion_ratio(isolated_pred, isolated_sources)
+            # Get mean without the empty sources (like in Mixit original paper)
+            msi_count = 0
+            msi_nb = 0
+            for i, label in enumerate(labels):
+                for j, l_batch in enumerate(label):
+                    if l_batch != "Nothing":
+                        msi_count += msi[j, i] - scale_invariant_signal_distortion_ratio(mix[j], isolated_sources[j, i])
+                        msi_nb +=1
+            msi = msi_count/msi_nb
 
             self.log_dict({
-                "test_si_sdr" : sdr,
-                "test_target_si_sdr" : target_si_sdr,
+                "test_MoMi" : si_sdri,
+                "test_target_si_sdri" : target_si_sdri,
+                "test_msi" : msi,
             }, batch_size=mix.shape[0])
 
     def on_test_end(self):
         if isinstance(self.logger, WandbLogger):
-            mix0, isolatedSources0, labels0 = self.trainer.datamodule.dataset_test_respeaker.get_serialized_sample(15, 1300)
+            mix0, isolatedSources0, labels0 = self.trainer.datamodule.dataset_test_respeaker.get_serialized_sample(15, 1400)
             mix1, isolatedSources1, labels1 = self.trainer.datamodule.dataset_test_respeaker.get_serialized_sample(10, 1300)
 
-            mix = torch.stack((mix0, mix1)).to(self.device)
+            multimic_mix = torch.stack((mix0, mix1)).to(self.device)
             isolatedSources = torch.stack((isolatedSources0, isolatedSources1)).to(self.device)
             labels = [labels0, labels1]
 
             # Ignore mics for now
-            mix = mix[:,0]
+            mix = multimic_mix[:,0]
             isolatedSources = isolatedSources[:,:,0]
 
             if not self.supervised:
-                target, mix = self.prepare_data_for_unsupervised(isolatedSources)
+                target = self.prepare_data_for_unsupervised(isolatedSources)
             else:
                 target = self.prepare_data_for_supervised(isolatedSources)
 
-            isolated_pred = self(mix)
+            isolated_pred, pred_mask = self(mix, return_mask=True)
+
+            batch_stft = self.encoder.encoder(multimic_mix).transpose(0,1)
+            batch_target_stft = self.encoder.encoder(isolatedSources[:,0])
+            oracle_mask = torch.abs(batch_target_stft) / (torch.abs(batch_target_stft) + torch.abs(batch_stft[0]-batch_target_stft))
+            batch_pred_stft = batch_stft * pred_mask
+            batch_noise_stft = batch_stft - batch_pred_stft
+            batch_oracle_stft = batch_stft * oracle_mask
+            batch_oracle_noise_stft = batch_stft - batch_oracle_stft
+            batch_pred_stft = batch_pred_stft.permute(1,0,3,2).cpu().numpy()
+            batch_noise_stft = batch_noise_stft.permute(1,0,3,2).cpu().numpy()
+            batch_oracle_stft = batch_oracle_stft.permute(1,0,3,2).cpu().numpy()
+            batch_oracle_noise_stft = batch_oracle_noise_stft.permute(1,0,3,2).cpu().numpy()
+            batch_stft = batch_stft.permute(1,0,3,2).cpu().numpy()
+
+            batch_beamformed_pred = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
+            batch_beamformed_oracle = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
+            batch_oracle = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
+            for i, (pred_stft, noise_stft, oracle_stft, oracle_noise_stft, stft) in enumerate(zip(batch_pred_stft, batch_noise_stft, batch_oracle_stft, batch_oracle_noise_stft, batch_stft)):
+                pred_scm = sp.scm(sp.xspec(pred_stft))
+                noise_scm = sp.scm(sp.xspec(noise_stft))
+                mvdr = bf.mvdr(pred_scm, noise_scm)
+                beamformed_pred = bf.beam(stft, mvdr)
+                batch_beamformed_pred[i] = beamformed_pred
+
+                oracle_scm = sp.scm(sp.xspec(oracle_stft))
+                oracle_noise_scm = sp.scm(sp.xspec(oracle_noise_stft))
+                oracle_mvdr = bf.mvdr(oracle_scm, oracle_noise_scm)
+                oracle_beamformed_pred = bf.beam(stft, oracle_mvdr)
+                batch_beamformed_oracle[i] = oracle_beamformed_pred
+                batch_oracle[i] = oracle_stft[0]
+
+            batch_beamformed_pred = torch.tensor(batch_beamformed_pred, device=self.device)
+            batch_beamformed_pred = batch_beamformed_pred.transpose(1,2)
+            batch_beamformed_oracle = torch.tensor(batch_beamformed_oracle, device=self.device)
+            batch_beamformed_oracle = batch_beamformed_oracle.transpose(1,2)
+            batch_oracle = torch.tensor(batch_oracle, device=self.device)
+            batch_oracle = batch_oracle.transpose(1,2)
+            
+            # Post mask
+            pred_mask[pred_mask<0.3] = 0.3
+            batch_beamformed_pred = batch_beamformed_pred*pred_mask
+
+            batch_beamformed_pred = self.decoder.decoder(batch_beamformed_pred)
+            batch_beamformed_pred = torch.nn.functional.pad(batch_beamformed_pred, (0, int(mix.shape[-1]-batch_beamformed_pred.shape[-1])), mode="constant", value=0)
+            batch_beamformed_oracle = self.decoder.decoder(batch_beamformed_oracle)
+            batch_beamformed_oracle = torch.nn.functional.pad(batch_beamformed_oracle, (0, int(mix.shape[-1]-batch_beamformed_oracle.shape[-1])), mode="constant", value=0)
+            batch_oracle = self.decoder.decoder(batch_oracle)
+            batch_oracle = torch.nn.functional.pad(batch_oracle, (0, int(mix.shape[-1]-batch_oracle.shape[-1])), mode="constant", value=0)
 
             if not self.supervised:
-                isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
                 isolated_pred = self.efficient_mixit(isolated_pred, isolatedSources)
 
             pred = self.efficient_mixit(isolated_pred, target)
@@ -564,23 +679,56 @@ class ConvTasNet(pl.LightningModule):
                 for waveform_source, waveform_groundTruth in zip(preds, groundTruths):
                     table.append([
                         f"{label[i]}, {label[i+1]}",
-                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean(),
+                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
                         wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
                         wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
                         wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
                         wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
                     ])
                     i+=2
+
                 self.logger.log_table(key="results", columns=self.log_columns, data=table)
 
                 isolated_pred = isolated_pred[0]
                 isolated_sources = isolatedSources[0]
+                beam_pred = batch_beamformed_pred[0]
+                oracle_pred = batch_oracle[0]
+                beam_oracle_pred = batch_beamformed_oracle[0]
                 i = 0
                 table = []
+                table.append([
+                        f"{label[0]}",
+                        scale_invariant_signal_distortion_ratio(oracle_pred[None, ...], isolated_sources[0][None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
+                        wandb.Image(plot_spectrogram_from_waveform(oracle_pred[None, ...]+self.epsilon, 16000, title="Oracle prediction")),
+                        wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
+                        wandb.Audio(oracle_pred.cpu().numpy(), sample_rate=16000),
+                        wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                    ])
+                table.append([
+                        f"{label[0]}",
+                        scale_invariant_signal_distortion_ratio(beam_oracle_pred[None, ...], isolated_sources[0][None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
+                        wandb.Image(plot_spectrogram_from_waveform(beam_oracle_pred[None, ...]+self.epsilon, 16000, title="Beamformed Oracle prediction")),
+                        wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
+                        wandb.Audio(beam_oracle_pred.cpu().numpy(), sample_rate=16000),
+                        wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                    ])
+                table.append([
+                        f"{label[0]}",
+                        scale_invariant_signal_distortion_ratio(beam_pred[None, ...], isolated_sources[0][None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
+                        wandb.Image(plot_spectrogram_from_waveform(beam_pred[None, ...]+self.epsilon, 16000, title="Beamformed prediction")),
+                        wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
+                        wandb.Audio(beam_pred.cpu().numpy(), sample_rate=16000),
+                        wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                    ])
                 for waveform_source, waveform_groundTruth in zip(isolated_pred, isolated_sources):
                     table.append([
                         f"{label[i]}",
-                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean(),
+                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
                         wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
                         wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
                         wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
@@ -610,14 +758,13 @@ class ConvTasNet(pl.LightningModule):
             isolatedSources = isolatedSources[:,:,0]
 
             if not self.supervised:
-                target, mix = self.prepare_data_for_unsupervised(isolatedSources)
+                target = self.prepare_data_for_unsupervised(isolatedSources)
             else:
                 target = self.prepare_data_for_supervised(isolatedSources)
 
             isolated_pred = self(mix)
 
             if not self.supervised:
-                isolated_pred = self.mixture_consistency_projection(isolated_pred, mix)
                 isolated_pred = self.efficient_mixit(isolated_pred, isolatedSources)
 
             pred = self.efficient_mixit(isolated_pred, target)
@@ -632,13 +779,15 @@ class ConvTasNet(pl.LightningModule):
                 for waveform_source, waveform_groundTruth in zip(preds, groundTruths):
                     table.append([
                         f"{label[i]}, {label[i+1]}",
-                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean(),
+                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
                         wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
                         wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
                         wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
                         wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
                     ])
                     i+=2
+
                 self.logger.log_table(key="results", columns=self.log_columns, data=table)
 
                 isolated_pred = isolated_pred[0]
@@ -648,7 +797,8 @@ class ConvTasNet(pl.LightningModule):
                 for waveform_source, waveform_groundTruth in zip(isolated_pred, isolatedSources):
                     table.append([
                         f"{label[i]}",
-                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean(),
+                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
                         wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
                         wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
                         wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
@@ -666,7 +816,8 @@ class ConvTasNet(pl.LightningModule):
                 for waveform_source, waveform_groundTruth in zip(preds, groundTruths):
                     table.append([
                         f"{label[i]}",
-                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean(),
+                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
+                          scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
                         wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
                         wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
                         wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
@@ -700,13 +851,16 @@ class ConvTasNet(pl.LightningModule):
                 isolated_sources (Tensor): Batch, Sources, Time 
             
             Returns:
-                (Tuple of tensors): (Batch, Sources/2, 2, Time), (Batch, Time)
+                (Tuple of tensors): (Batch, Sources/2, 2, Time)
         """
-        isolated_mix = isolated_sources.reshape(isolated_sources.shape[0], -1, 2, isolated_sources.shape[2])
-        isolated_mix = torch.sum(isolated_mix, dim=2, keepdim=False)
-        new_mix = torch.sum(isolated_sources, dim=1, keepdim=False)
+        sources = isolated_sources.shape[1]
+        if sources > 2:
+            isolated_mix = isolated_sources.reshape(isolated_sources.shape[0], -1, 2, isolated_sources.shape[2])
+            isolated_mix = torch.sum(isolated_mix, dim=2, keepdim=False)
+        else:
+            isolated_mix = isolated_sources
 
-        return isolated_mix, new_mix
+        return isolated_mix
     
     def prepare_data_for_supervised(self, isolated_sources):
         """
@@ -727,17 +881,6 @@ class ConvTasNet(pl.LightningModule):
         new_isolated_source[:,1] = additionnal_sources_mix
 
         return new_isolated_source
-    
-    def compute_loss(self, pred, target):
-        loss, min_idx, parts = self.mixit_loss(
-            pred,
-            target,
-            return_est=True
-        )
-
-        new_pred = self.mixit_loss.reorder_source(pred, target, min_idx, parts)
-
-        return loss, new_pred
     
     def wav2fbank(self, wave):
         waveform = wave - wave.mean()
@@ -760,13 +903,15 @@ class ConvTasNet(pl.LightningModule):
         fbank = (fbank - self.classi_audio_conf["mean"]) / self.classi_audio_conf["std"]
 
         return fbank
-
-    @staticmethod
-    def negative_si_sdr(pred, target):
-        return -1*scale_invariant_signal_distortion_ratio(pred, target).mean(-1)
     
+    def negative_SNR(self, pred, target):
+        # Unsupervised sound separation using mixture invariant training
+        soft_threshold = 10**(-30/10)
+        loss = 10*torch.log10((target-pred)**2 + soft_threshold*(target**2) + self.epsilon) - 10*torch.log10(target**2 + self.epsilon)
+        return loss.mean()
+
     @staticmethod 
-    def efficient_mixit(pred, target, return_target_permutation = False):
+    def efficient_mixit(pred, target, return_target_permutation = False, force_target = False):
         least_squares_result = torch.linalg.lstsq(pred.transpose(1,2), target.transpose(1,2)).solution.transpose(1,2)
 
         max_indices = torch.argmax(least_squares_result, dim=1)
@@ -774,6 +919,10 @@ class ConvTasNet(pl.LightningModule):
         # Create a binary mask where 1 is set at the indices of minimum values, rest to 0
         mask = torch.zeros_like(least_squares_result)
         mask.scatter_(1, max_indices.unsqueeze(1), 1)
+
+        if force_target:
+            mask[..., 0, 0] = 1
+            mask[..., 1, 0] = 0
 
         mixit_result = torch.bmm(mask, pred)
 

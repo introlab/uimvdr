@@ -25,7 +25,7 @@ class CustomDataset(Dataset):
                  forceCPU=False,
                  supervised=True, 
                  return_spectrogram=True,
-                 nb_iteration=1, 
+                 nb_iteration=5, 
                  nb_of_seconds=3) -> None:
         super().__init__()
         self.dir = dir
@@ -84,7 +84,7 @@ class CustomDataset(Dataset):
         for source_nb in range(self.max_sources-1):
             # TODO: set the probability to non-zero
             # Make sure that there is not nothing in the second mix
-            if random.random() >= 0.2 or \
+            if random.random() >= 0.5 or \
                (not self.supervised and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
@@ -137,7 +137,7 @@ class CustomDataset(Dataset):
         additionnal_idx = (idx*key) % len(self.paths_to_data)
         for source_nb in range(self.max_sources-1):
             # Make sure that there is not nothing in the second mix
-            if random.random() >= 0.2 or \
+            if random.random() >= 0.5 or \
                (not self.supervised and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx += 1

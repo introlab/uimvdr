@@ -44,7 +44,8 @@ class FSD50KDataset(Dataset):
                  forceCPU=False, 
                  return_spectrogram=True, 
                  rir=False,
-                 supervised=True) -> None:
+                 supervised=True,
+                 isolated=False) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
@@ -57,6 +58,7 @@ class FSD50KDataset(Dataset):
         self.rir = rir
         self.return_spectrogram = return_spectrogram
         self.supervised = supervised
+        self.isolated = isolated
         self.ontology_dict = {}
         ontology = json.load(open(os.path.join(dir, "FSD50K.ground_truth", "ontology.json")))
         for item in ontology:
@@ -78,26 +80,35 @@ class FSD50KDataset(Dataset):
         with open(os.path.join(dir, "FSD50K.ground_truth", "dev.csv"), mode='r') as csv_file:
             csvreader = csv.reader(csv_file)
             for idx, row in enumerate(csvreader):
+                
                 if row[3] == self.type:
                     ids = row[2].split(",")
-                    multiple_leaf_class = False
-                    one_leaf_class = False
-                    
-                    for identifier in ids:
-                        if self.ontology_dict[identifier] and not self.ontology_dict[identifier]['child_ids']:
-                            if one_leaf_class:
-                                multiple_leaf_class = True
-                            if not one_leaf_class:
-                                leaf_class = self.ontology_dict[identifier]['name']
-                                one_leaf_class = True
+                    if isolated:
+                        multiple_leaf_class = False
+                        one_leaf_class = False
+                        
+                        for identifier in ids:
+                            if self.ontology_dict[identifier] and not self.ontology_dict[identifier]['child_ids']:
+                                if one_leaf_class:
+                                    multiple_leaf_class = True
+                                if not one_leaf_class:
+                                    leaf_class = self.ontology_dict[identifier]['name']
+                                    one_leaf_class = True
 
-                    if (one_leaf_class and not multiple_leaf_class) or \
-                       (not one_leaf_class and not multiple_leaf_class):
+                        if (one_leaf_class and not multiple_leaf_class) or \
+                        (not one_leaf_class and not multiple_leaf_class):
+                            if name_to_id[target_class] in ids:
+                                self.paths_to_target_data.append(row[0]) 
+                            else:
+                                self.paths_to_data.append(row[0])
+                            self.labels[row[0]] = row[1]
+                    else:
                         if name_to_id[target_class] in ids:
                             self.paths_to_target_data.append(row[0]) 
                         else:
                             self.paths_to_data.append(row[0])
                         self.labels[row[0]] = row[1]
+
         #Classification
         self.index_dict = make_index_dict(os.path.join(dir, "FSD50K.ground_truth", "class_labels_indices.csv"))
 
@@ -168,7 +179,7 @@ class FSD50KDataset(Dataset):
         for source_nb in range(self.max_sources-1):
             # TODO: set the probability to non-zero
             # Make sure that there is not nothing in the second mix
-            if random.random() >= 0.2 or \
+            if random.random() >= 0.5 or \
                (not self.supervised and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
@@ -185,7 +196,7 @@ class FSD50KDataset(Dataset):
             else:
                 # Empty source
                 additionnal_idxs.append(-1)
-                idxs_classes.append("nothing") 
+                idxs_classes.append("Nothing") 
 
         for index in additionnal_idxs:
             if index == -1:
@@ -255,7 +266,7 @@ class FSD50KDataset(Dataset):
         idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
         additionnal_idx = (idx*key) % len(self.paths_to_data)
         for source_nb in range(self.max_sources-1):
-            if random.random() >= 0.2 or \
+            if random.random() >= 0.5 or \
                (not self.supervised and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx += 1
@@ -272,7 +283,7 @@ class FSD50KDataset(Dataset):
             else:
                 # Empty source
                 additionnal_idxs.append(-1)
-                idxs_classes.append("nothing") 
+                idxs_classes.append("Nothing") 
 
         additional_mix = torch.zeros_like(mix)
         for num_of_additionnal, index in enumerate(additionnal_idxs):
@@ -395,13 +406,15 @@ if __name__ == '__main__':
 
     frame_size = 512
     hop_size = int(frame_size / 2)
-    target_class = "Speech"
+    target_class = "Bark"
     dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset/FSD50K",
                             frame_size, 
                             hop_size, 
                             target_class, 
                             forceCPU=True, 
-                            return_spectrogram=False)
+                            return_spectrogram=False,
+                            supervised=False,
+                            isolated=True)
     print(len(dataset))
 
     # _, _, label = dataset.get_serialized_sample(10, 1300)
