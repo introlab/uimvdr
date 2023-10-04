@@ -57,7 +57,10 @@ class CustomDataset(Dataset):
                             position = class_dir_path.split("/")[-2]
                             if not position == "Diffus1" and not position == "Diffus2":
                                 if class_dir == self.target_class:
-                                    self.paths_to_target_data.append(DataEntry(audio_file,class_dir,position))
+                                    if self.mic_array == "kinect" and (position == "A" or position == "B" or position == "C" or position == "D" or position == "E"):
+                                        self.paths_to_target_data.append(DataEntry(audio_file,class_dir,position))
+                                    elif self.mic_array != "kinect":
+                                        self.paths_to_target_data.append(DataEntry(audio_file,class_dir,position))
                                 else:
                                     self.paths_to_data.append(DataEntry(audio_file,class_dir,position))
 
@@ -99,18 +102,19 @@ class CustomDataset(Dataset):
                 # Empty source
                 additionnal_idxs.append(-1)
                 idxs_classes.append("Nothing") 
-        
-                additional_mix = torch.zeros_like(mix)
+
+        mix = self.rms_normalize(mix, True)
 
         isolated_sources = mix.clone()[None, ...]
         for index in additionnal_idxs:
             if index == -1:
-                additionnal_x = torch.zeros_like(additional_mix)
+                additionnal_x = torch.zeros_like(mix)
             else:
                 wav_path = self.paths_to_data[index].path
                 additionnal_x, file_sample_rate = torchaudio.load(wav_path)
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
 
+                additionnal_x = self.rms_normalize(additionnal_x, True)
                 if torch.sum(torch.isnan(additionnal_x)):
                     print(self.paths_to_data[index].path)
                     additionnal_x = torch.zeros_like(additionnal_x)
@@ -118,6 +122,15 @@ class CustomDataset(Dataset):
                 mix += additionnal_x
 
             isolated_sources = torch.cat((isolated_sources, additionnal_x[None, ...]))
+
+        mix, factor = self.peak_normalize(mix)
+        isolated_sources *= factor
+
+        #randomize volume
+        volume = random.random()
+
+        mix *= volume
+        isolated_sources *= volume
 
         if self.return_spectrogram:
             mix = self.stft(mix)

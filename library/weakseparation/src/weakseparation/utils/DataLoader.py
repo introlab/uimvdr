@@ -19,7 +19,8 @@ class DataModule(pl.LightningDataModule):
                  max_sources=3, 
                  num_of_workers=4, 
                  return_spectrogram=True,
-                 supervised=True):
+                 supervised=True,
+                 isolated=False):
         super().__init__()
         self.dataset = dataset
         self.test_dataset = test_dataset
@@ -35,11 +36,11 @@ class DataModule(pl.LightningDataModule):
         self.target_class = target_class
         self.non_mixing_classes = non_mixing_classes
         self.supervised = supervised
+        self.isolated = isolated
 
     def setup(self, stage: str):
-        # Assign test dataset for use in dataloader(s)
+        nb_of_test_iteration = 5
         if stage == "fit":
-            # TRAIN_VALIDATION_SPLIT = 0.9
             self.dataset_train = self.dataset(
                 self.data_dir,
                 self.frame_size,
@@ -52,6 +53,7 @@ class DataModule(pl.LightningDataModule):
                 forceCPU=True,
                 return_spectrogram=self.return_spectrogram,
                 supervised=self.supervised,
+                isolated=self.isolated,
             )
         self.dataset_val = self.dataset(
             self.data_dir, 
@@ -65,6 +67,7 @@ class DataModule(pl.LightningDataModule):
             forceCPU=True,
             return_spectrogram=self.return_spectrogram,
             supervised=self.supervised,
+            isolated=self.isolated,
         )
 
         self.dataset_test_respeaker = self.test_dataset(
@@ -74,9 +77,11 @@ class DataModule(pl.LightningDataModule):
             target_class=self.target_class,
             sample_rate=self.sample_rate,
             max_sources=self.max_sources,
-            supervised=self.supervised,  
+            supervised=self.supervised,
+            mic_array="respeaker",  
             forceCPU=True, 
-            return_spectrogram=False
+            return_spectrogram=False,
+            nb_iteration = nb_of_test_iteration,
         )
         self.dataset_test_kinect = self.test_dataset(
             self.test_data_dir, 
@@ -85,9 +90,11 @@ class DataModule(pl.LightningDataModule):
             target_class=self.target_class,
             sample_rate=self.sample_rate,
             max_sources=self.max_sources,  
-            supervised=self.supervised,  
+            supervised=self.supervised,
+            mic_array="kinect",   
             forceCPU=True, 
-            return_spectrogram=False
+            return_spectrogram=False,
+            nb_iteration = nb_of_test_iteration,
         )
         self.dataset_test_16sounds = self.test_dataset(
             self.test_data_dir, 
@@ -96,9 +103,26 @@ class DataModule(pl.LightningDataModule):
             target_class=self.target_class,
             sample_rate=self.sample_rate,
             max_sources=self.max_sources,
-            supervised=self.supervised,    
+            supervised=self.supervised,
+            mic_array="16sounds",     
             forceCPU=True, 
-            return_spectrogram=False
+            return_spectrogram=False,
+            nb_iteration = nb_of_test_iteration,
+        )
+        self.dataset_test_fsd50k = self.dataset(
+            self.data_dir, 
+            self.frame_size, 
+            self.hop_size, 
+            type="test",
+            target_class=self.target_class,
+            non_mixing_classes=self.non_mixing_classes,
+            sample_rate=self.sample_rate,
+            max_sources=self.max_sources, 
+            forceCPU=True,
+            return_spectrogram=self.return_spectrogram,
+            supervised=self.supervised,
+            isolated=self.isolated,
+            nb_iteration = nb_of_test_iteration,
         )
 
     def train_dataloader(self):
@@ -120,7 +144,8 @@ class DataModule(pl.LightningDataModule):
         )
     
     def test_dataloader(self):
-        return [DataLoader(
+        return [
+        DataLoader(
             self.dataset_test_respeaker,
             batch_size=self.batch_size,
             num_workers=self.num_of_workers,
@@ -140,6 +165,14 @@ class DataModule(pl.LightningDataModule):
             num_workers=self.num_of_workers,
             shuffle=False,
             persistent_workers=False,
-        )]
+        ),
+        DataLoader(
+            self.dataset_test_fsd50k,
+            batch_size=self.batch_size,
+            num_workers=self.num_of_workers,
+            shuffle=False,
+            persistent_workers=False,
+        ),
+        ]
 
 

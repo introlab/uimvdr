@@ -45,6 +45,7 @@ class FSD50KDataset(Dataset):
                  return_spectrogram=True, 
                  rir=False,
                  supervised=True,
+                 nb_iteration=1,
                  isolated=False) -> None:
         super().__init__()
         self.dir = dir
@@ -58,7 +59,11 @@ class FSD50KDataset(Dataset):
         self.rir = rir
         self.return_spectrogram = return_spectrogram
         self.supervised = supervised
-        self.isolated = isolated
+        self.nb_iteration = nb_iteration
+        if supervised:
+            self.isolated = True
+        else:
+            self.isolated = isolated
         self.ontology_dict = {}
         ontology = json.load(open(os.path.join(dir, "FSD50K.ground_truth", "ontology.json")))
         for item in ontology:
@@ -77,11 +82,15 @@ class FSD50KDataset(Dataset):
         self.paths_to_data = []
         self.paths_to_target_data = []
         self.labels = {}
-        with open(os.path.join(dir, "FSD50K.ground_truth", "dev.csv"), mode='r') as csv_file:
+        if self.type != "test":
+            csv_path = os.path.join(dir, "FSD50K.ground_truth", "dev.csv")
+        else:
+            csv_path = os.path.join(dir, "FSD50K.ground_truth", "eval.csv")
+
+        with open(csv_path, mode='r') as csv_file:
             csvreader = csv.reader(csv_file)
             for idx, row in enumerate(csvreader):
-                
-                if row[3] == self.type:
+                if (self.type == "test" or row[3] == self.type) and idx != 0:
                     ids = row[2].split(",")
                     if isolated:
                         multiple_leaf_class = False
@@ -92,7 +101,6 @@ class FSD50KDataset(Dataset):
                                 if one_leaf_class:
                                     multiple_leaf_class = True
                                 if not one_leaf_class:
-                                    leaf_class = self.ontology_dict[identifier]['name']
                                     one_leaf_class = True
 
                         if (one_leaf_class and not multiple_leaf_class) or \
@@ -119,7 +127,8 @@ class FSD50KDataset(Dataset):
         self.list_of_target_classes = [self.ontology_dict[n]['name'] for n in self.list_of_target_classes]
 
         if self.rir:
-            self.path_to_rirs = "/home/jacob/dev/weakseparation/library/dataset/dEchorate/dEchorate_rir.h5"
+            library_root = "/".join(__file__.split("/")[:-5])
+            self.path_to_rirs = os.path.join(library_root, "dataset", "dEchorate", "dEchorate_rir.h5")
             self.rir_dataset = h5py.File(self.path_to_rirs, mode='r')
             self.rooms = list(self.rir_dataset['rir'].keys())
             self.sources = list(self.rir_dataset['rir'][self.rooms[0]].keys())
@@ -145,12 +154,16 @@ class FSD50KDataset(Dataset):
         return all_children
 
     def __len__(self):
-        return len(self.paths_to_target_data)
+        return len(self.paths_to_target_data)*self.nb_iteration
     
     def __getitem__(self, idx):
+        idx = idx % len(self.paths_to_target_data)
         # The 16k samples were generated using sox
         # os.system('sox ' + basepath + audiofile+' -r 16000 ' + targetpath + audiofile + '> /dev/null 2>&1')
-        wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav") 
+        if self.type != "test":
+            wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav")
+        else:
+            wav_path = os.path.join(self.dir, "FSD50K.eval_audio" ,self.paths_to_target_data[idx] + ".wav")
 
         x, file_sample_rate = torchaudio.load(wav_path)
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
@@ -177,7 +190,6 @@ class FSD50KDataset(Dataset):
         additionnal_idxs = []
         idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
         for source_nb in range(self.max_sources-1):
-            # TODO: set the probability to non-zero
             # Make sure that there is not nothing in the second mix
             if random.random() >= 0.5 or \
                (not self.supervised and source_nb == int(self.max_sources //2)):
@@ -202,7 +214,11 @@ class FSD50KDataset(Dataset):
             if index == -1:
                 additionnal_x = torch.zeros_like(mix)
             else:
-                wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[index] + ".wav") 
+                if self.type != "test":
+                    wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[idx] + ".wav")
+                else:
+                    wav_path = os.path.join(self.dir, "FSD50K.eval_audio" ,self.paths_to_data[idx] + ".wav")
+
                 additionnal_x, file_sample_rate = torchaudio.load(wav_path)
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
@@ -235,7 +251,7 @@ class FSD50KDataset(Dataset):
             mix = self.stft(mix)
             isolated_sources = self.stft(isolated_sources)
 
-        if not self.supervised:
+        if not self.supervised and self.type != "test":
             return mix, isolated_sources, idxs_classes, classification_label
         else:
             return mix, isolated_sources, idxs_classes
@@ -413,7 +429,8 @@ if __name__ == '__main__':
                             target_class, 
                             forceCPU=True, 
                             return_spectrogram=False,
-                            supervised=False,
+                            type="test",
+                            supervised=True,
                             isolated=True)
     print(len(dataset))
 
