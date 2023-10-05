@@ -268,6 +268,10 @@ class ConvTasNet(pl.LightningModule):
             self.classi_loss_fnct = torch.nn.BCELoss()
             self.alpha = alpha
 
+        # Beamforming
+        self.scm_transform = torchaudio.transforms.PSD()
+        self.mvdr_transform = torchaudio.transforms.SoudenMVDR()
+
         self.save_hyperparameters()
 
     def forward(self, waveform, return_target_spectrogram=False, return_mask=False):
@@ -503,91 +507,60 @@ class ConvTasNet(pl.LightningModule):
         mix_si_sdr = scale_invariant_signal_distortion_ratio(mix, isolated_sources[:,0]).mean()
         target_si_sdri = target_si_sdr - mix_si_sdr
 
+        stft_mix = self.encoder.encoder(multimic_mix)
+        stft_target = self.encoder.encoder(multimic_isolated_sources[:,0])
+        oracle_mask = torch.abs(stft_target[:,0]) / (torch.abs(stft_target[:,0]) + torch.abs(stft_mix[:,0]-stft_target[:,0]) + self.epsilon)
+        stft_oracle_pred = (stft_mix.transpose(0,1) * oracle_mask).transpose(0,1)
+
+        oracle_pred = self.decoder.decoder(stft_oracle_pred[:,0])
+        oracle_pred = torch.nn.functional.pad(oracle_pred, (0, int(mix.shape[-1]-oracle_pred.shape[-1])), mode="constant", value=0)
+
+        oracle_si_sdr = scale_invariant_signal_distortion_ratio(oracle_pred, isolated_sources[:,0]).mean()
+        oracle_si_sdri = oracle_si_sdr - mix_si_sdr
+
         if multimic_mix.shape[1] > 1:
-            batch_stft = self.encoder.encoder(multimic_mix).transpose(0,1)
-            batch_target_stft = self.encoder.encoder(isolated_sources[:,0])
-            oracle_mask = torch.abs(batch_target_stft) / (torch.abs(batch_target_stft) + torch.abs(batch_stft[0]-batch_target_stft) + self.epsilon)
-            batch_pred_stft = batch_stft * pred_mask
-            batch_noise_stft = batch_stft - batch_pred_stft
-            batch_oracle_stft = batch_stft * oracle_mask
-            batch_oracle_noise_stft = batch_stft - batch_oracle_stft
-            batch_target_stft = self.encoder.encoder(multimic_isolated_sources[:,0]).permute(0,1,3,2).cpu().numpy()
-            batch_pred_stft = batch_pred_stft.permute(1,0,3,2).cpu().numpy()
-            batch_noise_stft = batch_noise_stft.permute(1,0,3,2).cpu().numpy()
-            batch_oracle_stft = batch_oracle_stft.permute(1,0,3,2).cpu().numpy()
-            batch_oracle_noise_stft = batch_oracle_noise_stft.permute(1,0,3,2).cpu().numpy()
-            batch_stft = batch_stft.permute(1,0,3,2).cpu().numpy()
+            # Get Spectrograms
+            stft_pred = (stft_mix.transpose(0,1) * pred_mask).transpose(0,1)
+            stft_noise = stft_mix - stft_pred
+            stft_oracle_noise = stft_mix - stft_oracle_pred
 
-            batch_beamformed_pred = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
-            batch_beamformed_target = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
-            batch_beamformed_oracle_target = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
-            batch_beamformed_oracle = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
-            batch_oracle = np.zeros((batch_noise_stft.shape[0], batch_noise_stft.shape[2], batch_noise_stft.shape[3]), dtype=np.complex128)
-            for i, (pred_stft, noise_stft, oracle_stft, oracle_noise_stft, target_stft, stft) in enumerate(zip(batch_pred_stft, batch_noise_stft, batch_oracle_stft, batch_oracle_noise_stft, batch_target_stft, batch_stft)):
-                pred_scm = sp.scm(sp.xspec(pred_stft))
-                noise_scm = sp.scm(sp.xspec(noise_stft))
-                # Diagonal loading to prevent sigular matrix
-                noise_scm += np.eye(noise_scm.shape[1]) * self.epsilon
-                mvdr = bf.mvdr(pred_scm, noise_scm)
-                batch_beamformed_target[i] = bf.beam(target_stft, mvdr)
-                batch_beamformed_pred[i] = bf.beam(stft, mvdr)
+            # Get Spatial covariance matrices
+            scm_pred = self.scm_transform(stft_pred)
+            scm_pred_noise = self.scm_transform(stft_noise)
+            scm_oracle = self.scm_transform(stft_oracle_pred)
+            scm_oracle_noise = self.scm_transform(stft_oracle_noise)
 
-                oracle_scm = sp.scm(sp.xspec(oracle_stft))
-                oracle_noise_scm = sp.scm(sp.xspec(oracle_noise_stft))
-                # Diagonal loading to prevent sigular matrix
-                oracle_noise_scm += np.eye(oracle_noise_scm.shape[1]) * self.epsilon
-                oracle_mvdr = bf.mvdr(oracle_scm, oracle_noise_scm)
-                batch_beamformed_oracle[i] = bf.beam(stft, oracle_mvdr)
-                batch_beamformed_oracle_target[i] = bf.beam(target_stft, oracle_mvdr)
-                batch_oracle[i] = oracle_stft[0]
+            # Compute beamforming weight and apply it
+            beamformed_pred = self.mvdr_transform(stft_mix, scm_pred, scm_pred_noise, reference_channel=0)
+            beamformed_target = self.mvdr_transform(stft_target, scm_pred, scm_pred_noise, reference_channel=0)
+            beamformed_oracle = self.mvdr_transform(stft_mix, scm_oracle, scm_oracle_noise, reference_channel=0)
+            beamformed_oracle_target = self.mvdr_transform(stft_target, scm_oracle, scm_oracle_noise, reference_channel=0)
 
-            batch_beamformed_pred = torch.tensor(batch_beamformed_pred, device=self.device)
-            batch_beamformed_pred = batch_beamformed_pred.transpose(1,2)
-            batch_beamformed_target = torch.tensor(batch_beamformed_target, device=self.device)
-            batch_beamformed_target = batch_beamformed_target.transpose(1,2)
-            batch_beamformed_oracle = torch.tensor(batch_beamformed_oracle, device=self.device)
-            batch_beamformed_oracle = batch_beamformed_oracle.transpose(1,2)
-            batch_beamformed_oracle_target = torch.tensor(batch_beamformed_oracle_target, device=self.device)
-            batch_beamformed_oracle_target = batch_beamformed_oracle_target.transpose(1,2)
-            batch_oracle = torch.tensor(batch_oracle, device=self.device)
-            batch_oracle = batch_oracle.transpose(1,2)
-            
             # Post mask
-            pred_mask[pred_mask<0.3] = 0.3
-            batch_beamformed_pred = batch_beamformed_pred*pred_mask
+            post_mask = pred_mask.clone()
+            post_mask[post_mask<0.3] = 0.3
+            beamformed_pred = beamformed_pred*pred_mask
 
-            batch_beamformed_pred = self.decoder.decoder(batch_beamformed_pred)
-            batch_beamformed_pred = torch.nn.functional.pad(batch_beamformed_pred, (0, int(mix.shape[-1]-batch_beamformed_pred.shape[-1])), mode="constant", value=0)
-            batch_beamformed_target = self.decoder.decoder(batch_beamformed_target)
-            batch_beamformed_target = torch.nn.functional.pad(batch_beamformed_target, (0, int(mix.shape[-1]-batch_beamformed_target.shape[-1])), mode="constant", value=0)
-            batch_beamformed_oracle = self.decoder.decoder(batch_beamformed_oracle)
-            batch_beamformed_oracle = torch.nn.functional.pad(batch_beamformed_oracle, (0, int(mix.shape[-1]-batch_beamformed_oracle.shape[-1])), mode="constant", value=0)
-            batch_beamformed_oracle_target = self.decoder.decoder(batch_beamformed_oracle_target)
-            batch_beamformed_oracle_target = torch.nn.functional.pad(batch_beamformed_oracle_target, (0, int(mix.shape[-1]-batch_beamformed_oracle_target.shape[-1])), mode="constant", value=0)
-            batch_oracle = self.decoder.decoder(batch_oracle)
-            batch_oracle = torch.nn.functional.pad(batch_oracle, (0, int(mix.shape[-1]-batch_oracle.shape[-1])), mode="constant", value=0)
+            # Spectrogram -> Waveform
+            beamformed_pred = self.decoder.decoder(beamformed_pred)
+            beamformed_pred = torch.nn.functional.pad(beamformed_pred, (0, int(mix.shape[-1]-beamformed_pred.shape[-1])), mode="constant", value=0)
+            beamformed_target = self.decoder.decoder(beamformed_target)
+            beamformed_target = torch.nn.functional.pad(beamformed_target, (0, int(mix.shape[-1]-beamformed_target.shape[-1])), mode="constant", value=0)
+            beamformed_oracle = self.decoder.decoder(beamformed_oracle)
+            beamformed_oracle = torch.nn.functional.pad(beamformed_oracle, (0, int(mix.shape[-1]-beamformed_oracle.shape[-1])), mode="constant", value=0)
+            beamformed_oracle_target = self.decoder.decoder(beamformed_oracle_target)
+            beamformed_oracle_target = torch.nn.functional.pad(beamformed_oracle_target, (0, int(mix.shape[-1]-beamformed_oracle_target.shape[-1])), mode="constant", value=0)
 
-            oracle_si_sdr = scale_invariant_signal_distortion_ratio(batch_oracle, isolated_sources[:,0]).mean()
-            oracle_si_sdri = oracle_si_sdr - mix_si_sdr
-
-            beam_target_si_sdr = scale_invariant_signal_distortion_ratio(batch_beamformed_pred, batch_beamformed_target).mean()
+            # Compute metrics
+            beam_target_si_sdr = scale_invariant_signal_distortion_ratio(beamformed_pred, beamformed_target).mean()
             beam_target_si_sdri = beam_target_si_sdr - mix_si_sdr
 
-            beam_oracle_si_sdr = scale_invariant_signal_distortion_ratio(batch_beamformed_oracle, batch_beamformed_oracle_target).mean()
+            beam_oracle_si_sdr = scale_invariant_signal_distortion_ratio(beamformed_oracle, beamformed_oracle_target).mean()
             beam_oracle_si_sdri = beam_oracle_si_sdr - mix_si_sdr
 
         else:
             beam_target_si_sdri = 0.0
             beam_oracle_si_sdri = 0.0
-
-            batch_stft = self.encoder.encoder(multimic_mix).transpose(0,1)
-            batch_target_stft = self.encoder.encoder(isolated_sources[:,0])
-            oracle_mask = torch.abs(batch_target_stft) / (torch.abs(batch_target_stft) + torch.abs(batch_stft[0]-batch_target_stft) + self.epsilon)
-            batch_oracle_stft = batch_stft * oracle_mask
-            batch_oracle_stft = self.decoder.decoder(batch_oracle_stft)
-            batch_oracle_stft = torch.nn.functional.pad(batch_oracle_stft, (0, int(mix.shape[-1]-batch_oracle_stft.shape[-1])), mode="constant", value=0)
-            oracle_si_sdr = scale_invariant_signal_distortion_ratio(batch_oracle_stft[0], isolated_sources[:,0]).mean()
-            oracle_si_sdri = oracle_si_sdr - mix_si_sdr
 
         isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
 
@@ -617,7 +590,7 @@ class ConvTasNet(pl.LightningModule):
                 "test_oracle_si_sdri" : oracle_si_sdri,
                 "test_target_si_sdri" : target_si_sdri,
                 "test_beam_target_si_sdri" : beam_target_si_sdri,
-                "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,               
+                "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,            
             }, batch_size=mix.shape[0])
         else:
             msi = scale_invariant_signal_distortion_ratio(isolated_pred, isolated_sources)
