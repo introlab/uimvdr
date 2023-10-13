@@ -15,9 +15,11 @@ class DataModule(pl.LightningDataModule):
                  hop_size, 
                  target_class=None,
                  non_mixing_classes=None,
+                 branch_class=None,
                  sample_rate=16000, 
                  max_sources=3, 
-                 num_of_workers=4, 
+                 num_of_workers=4,
+                 nb_of_seconds=3,
                  return_spectrogram=True,
                  supervised=True,
                  isolated=False):
@@ -35,11 +37,13 @@ class DataModule(pl.LightningDataModule):
         self.return_spectrogram = return_spectrogram
         self.target_class = target_class
         self.non_mixing_classes = non_mixing_classes
+        self.branch_class = branch_class
         self.supervised = supervised
         self.isolated = isolated
+        self.nb_of_seconds=nb_of_seconds
 
     def setup(self, stage: str):
-        nb_of_test_iteration = 5
+        nb_of_test_iteration = 1
         if stage == "fit":
             self.dataset_train = self.dataset(
                 self.data_dir,
@@ -48,82 +52,110 @@ class DataModule(pl.LightningDataModule):
                 type="train",
                 target_class=self.target_class,
                 non_mixing_classes=self.non_mixing_classes,
+                branch_class=self.branch_class,
                 sample_rate=self.sample_rate,
-                max_sources=self.max_sources, 
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds, 
                 forceCPU=True,
                 return_spectrogram=self.return_spectrogram,
                 supervised=self.supervised,
                 isolated=self.isolated,
             )
-        self.dataset_val = self.dataset(
-            self.data_dir, 
-            self.frame_size, 
-            self.hop_size, 
-            type="val",
-            target_class=self.target_class,
-            non_mixing_classes=self.non_mixing_classes,
-            sample_rate=self.sample_rate,
-            max_sources=self.max_sources, 
-            forceCPU=True,
-            return_spectrogram=self.return_spectrogram,
-            supervised=self.supervised,
-            isolated=self.isolated,
-        )
-
-        self.dataset_test_respeaker = self.test_dataset(
-            self.test_data_dir, 
-            self.frame_size, 
-            self.hop_size, 
-            target_class=self.target_class,
-            sample_rate=self.sample_rate,
-            max_sources=self.max_sources,
-            supervised=self.supervised,
-            mic_array="respeaker",  
-            forceCPU=True, 
-            return_spectrogram=False,
-            nb_iteration = nb_of_test_iteration,
-        )
-        self.dataset_test_kinect = self.test_dataset(
-            self.test_data_dir, 
-            self.frame_size, 
-            self.hop_size, 
-            target_class=self.target_class,
-            sample_rate=self.sample_rate,
-            max_sources=self.max_sources,  
-            supervised=self.supervised,
-            mic_array="kinect",   
-            forceCPU=True, 
-            return_spectrogram=False,
-            nb_iteration = nb_of_test_iteration,
-        )
-        self.dataset_test_16sounds = self.test_dataset(
-            self.test_data_dir, 
-            self.frame_size, 
-            self.hop_size, 
-            target_class=self.target_class,
-            sample_rate=self.sample_rate,
-            max_sources=self.max_sources,
-            supervised=self.supervised,
-            mic_array="16sounds",     
-            forceCPU=True, 
-            return_spectrogram=False,
-            nb_iteration = nb_of_test_iteration,
-        )
-        self.dataset_test_fsd50k = self.dataset(
-            self.data_dir, 
-            self.frame_size, 
-            self.hop_size, 
-            type="test",
-            target_class=self.target_class,
-            non_mixing_classes=self.non_mixing_classes,
-            sample_rate=self.sample_rate,
-            max_sources=self.max_sources, 
-            forceCPU=True,
-            return_spectrogram=self.return_spectrogram,
-            supervised=self.supervised,
-            isolated=self.isolated,
-            nb_iteration = nb_of_test_iteration,
-        )
+            self.dataset_val = self.dataset(
+                self.data_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                type="val",
+                target_class=self.target_class,
+                non_mixing_classes=self.non_mixing_classes,
+                branch_class=self.branch_class,
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds,
+                nb_iteration = 3,
+                forceCPU=True,
+                return_spectrogram=self.return_spectrogram,
+                supervised=self.supervised,
+                isolated=self.isolated,
+            )
+        if stage == "val":
+            self.dataset_val = self.dataset(
+                self.data_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                type="val",
+                target_class=self.target_class,
+                non_mixing_classes=self.non_mixing_classes,
+                branch_class=self.branch_class,
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds,
+                nb_iteration = 3,
+                forceCPU=True,
+                return_spectrogram=self.return_spectrogram,
+                supervised=self.supervised,
+                isolated=self.isolated,
+            )
+        if stage == "test":
+            self.dataset_test_respeaker = self.test_dataset(
+                self.test_data_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                target_class=self.target_class,
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds,
+                supervised=self.supervised,
+                mic_array="respeaker",  
+                forceCPU=True, 
+                return_spectrogram=False,
+                nb_iteration = nb_of_test_iteration,
+            )
+            self.dataset_test_kinect = self.test_dataset(
+                self.test_data_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                target_class=self.target_class,
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds,  
+                supervised=self.supervised,
+                mic_array="kinect",   
+                forceCPU=True, 
+                return_spectrogram=False,
+                nb_iteration = nb_of_test_iteration,
+            )
+            self.dataset_test_16sounds = self.test_dataset(
+                self.test_data_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                target_class=self.target_class,
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds,
+                supervised=self.supervised,
+                mic_array="16sounds",     
+                forceCPU=True, 
+                return_spectrogram=False,
+                nb_iteration = nb_of_test_iteration,
+            )
+            self.dataset_test_fsd50k = self.dataset(
+                self.data_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                type="test",
+                target_class=self.target_class,
+                non_mixing_classes=self.non_mixing_classes,
+                branch_class=self.branch_class,
+                sample_rate=self.sample_rate,
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds, 
+                forceCPU=True,
+                return_spectrogram=self.return_spectrogram,
+                supervised=self.supervised,
+                isolated=True,
+                nb_iteration = nb_of_test_iteration,
+            )
 
     def train_dataloader(self):
         return DataLoader(

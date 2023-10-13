@@ -31,13 +31,83 @@ def make_name_dict(label_csv):
             line_count += 1
     return name_lookup
 
+def get_tree(index_dict, data):
+    node_dict = {label['id']: OntNode(label, index_dict) for label in data}
+
+    for node_id in node_dict.keys():
+        node = node_dict[node_id]
+        for child_id in node.child_ids:
+            child_node = node_dict[child_id]
+            node.add_child(child_node)
+            child_node.add_parent(node)
+
+    root = OntNode.root(index_dict)
+    for node_id in node_dict.keys():
+        node = node_dict[node_id]
+        if len(node.parents()) == 0:
+            root.add_child(node)
+            node.add_parent(root)
+
+    return (root, node_dict)
+
+class OntNode():
+    def __init__(self, label_dict, index_dict):
+        self.id = label_dict['id']
+        if self.id in index_dict:
+            self.index = int(index_dict[self.id])
+        else:
+            self.index = None
+        self.name = label_dict['name']
+        self.description = label_dict['description']
+        self.citation_uri = label_dict['citation_uri']
+        self.child_ids = label_dict['child_ids']
+        self.parent_ids = []
+        self.child_nodes = []
+        self.parent_nodes = []
+        self.restrictions = label_dict['restrictions']
+
+    @classmethod
+    def root(cls, index_dict):
+        label_dict = {'id': 'ROOT', 'name': 'ROOT', 'description':
+                      'ROOT', 'citation_uri': '', 'child_ids': [],
+                      'restrictions': ''}
+        return cls(label_dict, index_dict)
+
+    def add_parent(self, parent_node):
+        if not self.is_root():
+            self.parent_nodes.append(parent_node)
+            self.parent_nodes.extend(parent_node.parent_nodes)
+            self.parent_ids.append(parent_node.id)
+            self.parent_ids.extend(parent_node.parent_ids)
+        return None
+
+    def add_child(self, child_node):
+        self.child_nodes.append(child_node)
+        return None
+
+    def parents(self):
+        if not self.is_root():
+            return self.parent_nodes
+        return None
+
+    def children(self):
+        return self.child_nodes
+
+    def is_root(self):
+        root = (self.name == "ROOT")
+        if root:
+            print("Node is root")
+        return root
+
+
 class FSD50KDataset(Dataset):
     def __init__(self, 
                  dir,
                  frame_size, 
                  hop_size, 
-                 target_class="Bark",
+                 target_class=["Bark"],
                  non_mixing_classes = ["Dog"],
+                 branch_class = "Domestic animals, pets",
                  type="train", 
                  sample_rate=16000, 
                  max_sources=3, 
@@ -46,15 +116,14 @@ class FSD50KDataset(Dataset):
                  rir=False,
                  supervised=True,
                  nb_iteration=1,
+                 nb_of_seconds=3,
                  isolated=False) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
         self.max_sources = max_sources
-        self.target_class = target_class
-        self.nb_of_seconds = 3
-        self.non_mixing_classes = non_mixing_classes.copy()
-        self.non_mixing_classes.append(target_class)
+        self.nb_of_seconds = nb_of_seconds
+        self.non_mixing_classes = non_mixing_classes
         self.type = type
         self.rir = rir
         self.return_spectrogram = return_spectrogram
@@ -69,6 +138,8 @@ class FSD50KDataset(Dataset):
         for item in ontology:
             self.ontology_dict[item["id"]] = item
         name_to_id = {v['name']: k for k, v in self.ontology_dict.items()}
+        self.index_dict = make_index_dict(os.path.join(dir, "FSD50K.ground_truth", "class_labels_indices.csv"))
+        tree = get_tree(self.index_dict, ontology)
 
         if forceCPU:
             self.device = 'cpu'
@@ -87,44 +158,47 @@ class FSD50KDataset(Dataset):
         else:
             csv_path = os.path.join(dir, "FSD50K.ground_truth", "eval.csv")
 
+        target_id = set([name_to_id[cls] for cls in target_class])
+        non_mixing_set = set([name_to_id[cls] for cls in self.non_mixing_classes])
+
         with open(csv_path, mode='r') as csv_file:
             csvreader = csv.reader(csv_file)
             for idx, row in enumerate(csvreader):
                 if (self.type == "test" or row[3] == self.type) and idx != 0:
-                    ids = row[2].split(",")
+                    ids = set(row[2].split(","))
                     if isolated:
                         multiple_leaf_class = False
                         one_leaf_class = False
+                        one_branch = True
                         
                         for identifier in ids:
+                            node = tree[1][name_to_id[branch_class]]
+                            if not (node in tree[1][identifier].parents() or node in tree[1][identifier].children() or node == tree[1][identifier]):
+                                one_branch = False
+
                             if self.ontology_dict[identifier] and not self.ontology_dict[identifier]['child_ids']:
                                 if one_leaf_class:
                                     multiple_leaf_class = True
+
                                 if not one_leaf_class:
                                     one_leaf_class = True
 
-                        if (one_leaf_class and not multiple_leaf_class) or \
-                        (not one_leaf_class and not multiple_leaf_class):
-                            if name_to_id[target_class] in ids:
+                        # if not isolated or (one_leaf_class and not multiple_leaf_class) or \
+                        # (not one_leaf_class and not multiple_leaf_class):
+                        if not isolated or (one_leaf_class and not multiple_leaf_class):
+                            if not target_id.isdisjoint(ids) and one_branch:
                                 self.paths_to_target_data.append(row[0]) 
                             else:
-                                self.paths_to_data.append(row[0])
+                                if non_mixing_set.isdisjoint(ids):
+                                    self.paths_to_data.append(row[0])
                             self.labels[row[0]] = row[1]
                     else:
-                        if name_to_id[target_class] in ids:
+                        if not target_id.isdisjoint(ids):
                             self.paths_to_target_data.append(row[0]) 
                         else:
-                            self.paths_to_data.append(row[0])
+                            if non_mixing_set.isdisjoint(ids):
+                                self.paths_to_data.append(row[0])
                         self.labels[row[0]] = row[1]
-
-        #Classification
-        self.index_dict = make_index_dict(os.path.join(dir, "FSD50K.ground_truth", "class_labels_indices.csv"))
-
-        # List of target classe(s)
-        target_id = name_to_id[self.target_class]
-        self.list_of_target_classes = [target_id]
-        self.list_of_target_classes.extend(self.get_child_classes(self.ontology_dict[target_id]['child_ids']))
-        self.list_of_target_classes = [self.ontology_dict[n]['name'] for n in self.list_of_target_classes]
 
         if self.rir:
             library_root = "/".join(__file__.split("/")[:-5])
@@ -170,6 +244,10 @@ class FSD50KDataset(Dataset):
         # TODO: number of seconds should be a parameter
         x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=True)
 
+        if torch.sum(torch.isnan(x)):
+            print("Target Nan")
+            print(self.paths_to_target_data[idx] + ".wav")
+
         # Label for clasification
         if not self.supervised:
             classification_label = torch.zeros(200, device=self.device, dtype=torch.float32)
@@ -192,16 +270,11 @@ class FSD50KDataset(Dataset):
         for source_nb in range(self.max_sources-1):
             # Make sure that there is not nothing in the second mix
             if random.random() >= 0.5 or \
-               (not self.supervised and source_nb == int(self.max_sources //2)):
+               ((not self.supervised or self.type=="test" or self.type=="val") and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
                     additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
-                    list_of_additionnal_classes = additionnal_idx_class.split(",")
-                    add_idx = True
-                    for cla in self.non_mixing_classes:
-                        if cla in list_of_additionnal_classes:
-                            add_idx = False
-                    if add_idx and additionnal_idx_class not in idxs_classes and not additionnal_idx in additionnal_idxs:
+                    if additionnal_idx_class not in idxs_classes and not additionnal_idx in additionnal_idxs:
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
@@ -257,6 +330,7 @@ class FSD50KDataset(Dataset):
             return mix, isolated_sources, idxs_classes
     
     def get_serialized_sample(self, idx, key=1500):
+        idx = idx % len(self.paths_to_target_data)
         wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav") 
 
         x, file_sample_rate = torchaudio.load(wav_path)
@@ -283,16 +357,11 @@ class FSD50KDataset(Dataset):
         additionnal_idx = (idx*key) % len(self.paths_to_data)
         for source_nb in range(self.max_sources-1):
             if random.random() >= 0.5 or \
-               (not self.supervised and source_nb == int(self.max_sources //2)):
+               ((not self.supervised or self.type=="test" or self.type=="val") == int(self.max_sources //2)):
                 while True:
                     additionnal_idx += 1
                     additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
-                    list_of_additionnal_classes = additionnal_idx_class.split(",")
-                    add_idx = True
-                    for cla in self.non_mixing_classes:
-                        if cla in list_of_additionnal_classes:
-                            add_idx = False
-                    if add_idx and additionnal_idx_class not in idxs_classes and not additionnal_idx in additionnal_idxs:
+                    if additionnal_idx_class not in idxs_classes and not additionnal_idx in additionnal_idxs:
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
@@ -422,14 +491,20 @@ if __name__ == '__main__':
 
     frame_size = 512
     hop_size = int(frame_size / 2)
-    target_class = "Bark"
+    target_class = ["Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"]
+    # target_class = ["Bark"]
+    non_mixing = ["Human voice"]
+    # non_mixing = ["Dog"]
+    branch_class = "Human voice"
     dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset/FSD50K",
                             frame_size, 
                             hop_size, 
-                            target_class, 
+                            target_class,
+                            non_mixing_classes=non_mixing,
+                            branch_class=branch_class,
                             forceCPU=True, 
                             return_spectrogram=False,
-                            type="test",
+                            type="train",
                             supervised=True,
                             isolated=True)
     print(len(dataset))

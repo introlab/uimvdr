@@ -18,7 +18,7 @@
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--train", "--epochs", "5"],
+            "args": ["--train", "--supervised", "--epochs", "10", "--target_class", "Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking","--non_mixing_classes", "Human voice"],
             "justMyCode": false
         },
         {
@@ -27,7 +27,7 @@
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--predict", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/dvoxgfr1"],
+            "args": ["--predict", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/8ghxzthf"],
             "justMyCode": false
         }
     ]

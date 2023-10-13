@@ -32,6 +32,9 @@ class CustomDataset(Dataset):
         self.sample_rate = sample_rate
         self.max_sources = max_sources
         self.target_class = target_class
+        speech_set = {"Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"}
+        if not set(self.target_class).isdisjoint(speech_set):
+            self.target_class = "Speech"
         self.nb_of_seconds = nb_of_seconds
         self.mic_array = mic_array
         self.supervised = supervised
@@ -56,7 +59,7 @@ class CustomDataset(Dataset):
                         if audio_file.is_file():
                             position = class_dir_path.split("/")[-2]
                             if not position == "Diffus1" and not position == "Diffus2":
-                                if class_dir == self.target_class:
+                                if class_dir in self.target_class:
                                     if self.mic_array == "kinect" and (position == "A" or position == "B" or position == "C" or position == "D" or position == "E"):
                                         self.paths_to_target_data.append(DataEntry(audio_file,class_dir,position))
                                     elif self.mic_array != "kinect":
@@ -88,7 +91,7 @@ class CustomDataset(Dataset):
             # TODO: set the probability to non-zero
             # Make sure that there is not nothing in the second mix
             if random.random() >= 0.5 or \
-               (not self.supervised and source_nb == int(self.max_sources //2)):
+               (source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
                     additionnal_idx_class = self.paths_to_data[additionnal_idx].class_name
@@ -139,6 +142,7 @@ class CustomDataset(Dataset):
         return mix, isolated_sources, idxs_classes
     
     def get_serialized_sample(self, idx, key=1500):
+        idx = idx % len(self.paths_to_target_data)
         target_data: DataEntry = self.paths_to_target_data[idx] 
 
         x, _ = torchaudio.load(target_data.path)
@@ -151,7 +155,7 @@ class CustomDataset(Dataset):
         for source_nb in range(self.max_sources-1):
             # Make sure that there is not nothing in the second mix
             if random.random() >= 0.5 or \
-               (not self.supervised and source_nb == int(self.max_sources //2)):
+               (source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx += 1
                     additionnal_idx_class = self.paths_to_data[additionnal_idx].class_name

@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 import torch
 
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import WandbLogger, CSVLogger
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
     torch.set_float32_matmul_precision('high')
@@ -27,24 +27,24 @@ def main(args):
 
         config_path = os.path.join(run_path, "files/config.yaml")
 
-    project_root = "/".join(__file__.split("/")[:-4])
-    log_path = os.path.join(project_root, "logs")
     if args.log:
         if args.ckpt_path is not None:
-            wandb_logger = WandbLogger(project="mc-weak-separation", save_dir=log_path, config=config_path)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=config_path)
         else:   
-            wandb_logger = WandbLogger(project="mc-weak-separation", save_dir=log_path, config=args)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=args)
     else:
         if args.ckpt_path is not None:
-            wandb_logger = WandbLogger(project="mc-weak-separation", save_dir=log_path, offline=True, config=config_path)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=config_path)
         else:   
-            wandb_logger = WandbLogger(project="mc-weak-separation", save_dir=log_path, offline=True, config=args)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args)
         
     resume_training = wandb.config["resume_training"]
     target_class = wandb.config["target_class"]
     non_mixing_classes = wandb.config["non_mixing_classes"]
+    branch_class = wandb.config["branch_class"]
     sample_rate = wandb.config["sample_rate"]
     supervised = wandb.config["supervised"]
+    nb_of_seconds = wandb.config["secs"]
     epochs = wandb.config["epochs"]
     learning_rate = wandb.config["learning_rate"]
     batch_size = wandb.config["batch_size"]
@@ -55,9 +55,11 @@ def main(args):
     kappa = wandb.config["kappa"]
     classification_percentage = wandb.config["classification_percentage"]
 
+    # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
+    # batch_size = 1
     isolated = True if supervised else False
     return_spectrogram = False
-    seed = 42
+    seed = 17
     frame_size = 1024
     bins = int(frame_size / 2) + 1
     hop_size = int(frame_size / 2)
@@ -79,19 +81,21 @@ def main(args):
             filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
         )
 
-    fsd50k_path = os.path.join(project_root, "library", "dataset", "FSD50K")
-    custom_dataset_path = os.path.join(project_root, "library", "dataset", "Custom", "separated")
+    fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
+    custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
     dm = weakseparation.DataModule(
         weakseparation.FSD50K.FSD50KDataset,
         fsd50k_path,
         weakseparation.customDataset.CustomDataset,
         custom_dataset_path,
-        target_class = target_class,
-        non_mixing_classes = non_mixing_classes,
-        frame_size = frame_size,
-        hop_size = hop_size,
+        target_class=target_class,
+        non_mixing_classes=non_mixing_classes,
+        branch_class=branch_class,
+        frame_size=frame_size,
+        hop_size=hop_size,
         sample_rate=sample_rate,
         max_sources=max_sources,
+        nb_of_seconds=nb_of_seconds,
         batch_size=batch_size,
         num_of_workers=num_of_workers,
         return_spectrogram=return_spectrogram,
@@ -118,7 +122,7 @@ def main(args):
         accelerator='gpu',
         devices=1,
         callbacks=[checkpoint_callback],
-        logger=wandb_logger,
+        logger=logger,
         deterministic=False if classification_percentage else True,
         log_every_n_steps=5,
         resume_from_checkpoint=ckpt_path if resume_training else None
@@ -129,12 +133,13 @@ def main(args):
 
     if args.predict:
         if not args.resume_training and os.path.exists(ckpt_path):
+            print(f"Starting Testing for {ckpt_path}")
             model = weakseparation.ConvTasNet.load_from_checkpoint(
                 checkpoint_path=ckpt_path
             )
             trainer.test(model=model, datamodule=dm)
 
-            print(f"Ending Testing for {files[0]}")
+            print(f"Ending Testing for {ckpt_path}")
         else:
             print("Starting Testing")
             trainer.test(model=model, datamodule=dm, ckpt_path="best")
@@ -181,7 +186,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target_class",
         type=str,
-        default="Bark",
+        nargs='*',
+        default=["Bark"],
         help="Target class for training"
     )
     parser.add_argument(
@@ -190,6 +196,12 @@ if __name__ == "__main__":
         type=str,
         default=["Dog"],
         help="Classes that should not be in additionnal sources in the dataset",
+    )
+    parser.add_argument(
+        '--branch_class',
+        type=str,
+        default="Domestic animals, pets",
+        help="There shall not be classes outside of this branch for the target in the dataset. Can be root or child of root ex: Animal our Wild Animals",
     )
     parser.add_argument(
         "--sample_rate",
@@ -202,6 +214,12 @@ if __name__ == "__main__":
         "--supervised",
         help="If true, will train in a supervised manner",
         action="store_true",
+    )
+    parser.add_argument(
+        "--secs",
+        type=int,
+        default=5,
+        help="Number of seconds in each audio sample",
     )
     parser.add_argument(
         "--epochs",
@@ -255,6 +273,19 @@ if __name__ == "__main__":
         default=0.0,
         help="Percentage of classification used in training",
     )
+    parser.add_argument(
+        "--log_path",
+        type=str,
+        default="/home/jacob/dev/weakseparation/logs",
+        help="Logging path",
+    )
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default="/home/jacob/dev/weakseparation/library/dataset",
+        help="Logging path",
+    )
+
 
 
     args = parser.parse_args()
