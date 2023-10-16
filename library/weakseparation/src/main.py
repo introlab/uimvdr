@@ -39,22 +39,22 @@ def main(args):
         else:   
             logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args)
         
-    resume_training = wandb.config["resume_training"]
-    target_class = wandb.config["target_class"]
-    non_mixing_classes = wandb.config["non_mixing_classes"]
-    branch_class = wandb.config["branch_class"]
-    sample_rate = wandb.config["sample_rate"]
-    supervised = wandb.config["supervised"]
-    nb_of_seconds = wandb.config["secs"]
-    epochs = wandb.config["epochs"]
-    learning_rate = wandb.config["learning_rate"]
-    batch_size = wandb.config["batch_size"]
-    num_of_workers = wandb.config["num_of_workers"]
-    alpha = wandb.config["alpha"]
-    beta = wandb.config["beta"]
-    gamma = wandb.config["gamma"]
-    kappa = wandb.config["kappa"]
-    classification_percentage = wandb.config["classification_percentage"]
+    resume_training = logger.experiment.config["resume_training"]
+    target_class = logger.experiment.config["target_class"]
+    non_mixing_classes = logger.experiment.config["non_mixing_classes"]
+    branch_class = logger.experiment.config["branch_class"]
+    sample_rate = logger.experiment.config["sample_rate"]
+    supervised = logger.experiment.config["supervised"]
+    nb_of_seconds = logger.experiment.config["secs"]
+    epochs = logger.experiment.config["epochs"]
+    learning_rate = logger.experiment.config["learning_rate"]
+    batch_size = logger.experiment.config["batch_size"]
+    num_of_workers = logger.experiment.config["num_of_workers"]
+    alpha = logger.experiment.config["alpha"]
+    beta = logger.experiment.config["beta"]
+    gamma = logger.experiment.config["gamma"]
+    kappa = logger.experiment.config["kappa"]
+    classification_percentage = logger.experiment.config["classification_percentage"]
 
     # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
     # batch_size = 1
