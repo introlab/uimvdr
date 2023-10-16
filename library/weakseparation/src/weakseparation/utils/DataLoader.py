@@ -43,7 +43,7 @@ class DataModule(pl.LightningDataModule):
         self.nb_of_seconds=nb_of_seconds
 
     def setup(self, stage: str):
-        nb_of_test_iteration = 1
+        nb_of_test_iteration = 10
         if stage == "fit":
             self.dataset_train = self.dataset(
                 self.data_dir,
