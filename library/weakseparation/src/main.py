@@ -6,6 +6,7 @@ import pytorch_lightning as pl
 import torch
 
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.loggers import WandbLogger, CSVLogger
 
 if torch.cuda.get_device_name() == 'NVIDIA GeForce RTX 3080 Ti':
@@ -120,7 +121,8 @@ def main(args):
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator='gpu',
-        devices=1,
+        devices=-1,
+        strategy = DDPStrategy(find_unused_parameters=False),
         callbacks=[checkpoint_callback],
         logger=logger,
         deterministic=False if classification_percentage else True,

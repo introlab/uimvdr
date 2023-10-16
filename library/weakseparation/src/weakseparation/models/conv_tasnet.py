@@ -336,8 +336,10 @@ class ConvTasNet(pl.LightningModule):
 
         msi = self.compute_msi(pred, isolated_sources, mix, labels)
 
-        self.log("train_loss", loss, batch_size=mix.shape[0])
-        self.log('train_MSi', msi, batch_size=mix.shape[0])
+        self.log_dict({
+            "train_loss": loss,
+            "train_MSi": msi,
+        }, batch_size=mix.shape[0], sync_dist=True)
 
         return loss
     
@@ -363,9 +365,11 @@ class ConvTasNet(pl.LightningModule):
         
         msi = self.compute_msi(pred, isolated_sources, mix, labels)
         
-        self.log('val_loss', loss, batch_size=mix.shape[0])
-        self.log('val_MSi', msi, batch_size=mix.shape[0])
-        self.log('val_target_SI_SDRi', target_si_sdri, batch_size=mix.shape[0])
+        self.log_dict({
+            'val_loss': loss,
+            'val_MSi': msi,
+            'val_target_SI_SDRi': target_si_sdri,
+        }, batch_size=mix.shape[0], sync_dist=True)
 
         return loss
     
@@ -413,9 +417,15 @@ class ConvTasNet(pl.LightningModule):
             classi_loss = self.alpha*classi_loss
             self.log('train_classi_loss', classi_loss)
 
-        rms = torch.square(torch.mean(isolated_pred**2, dim=-1))
-        sparcity_loss = self.kappa * rms.mean()/(rms**2).sum()
-        target_energy = self.gamma * torch.mean((target_pred_spectrogram+self.epsilon)**self.beta)
+        sparcity_loss = 0.0
+        if self.kappa:
+            rms = torch.square(torch.mean(isolated_pred**2, dim=-1))
+            sparcity_loss = self.kappa * rms.mean()/(rms**2).sum()
+
+        target_energy = 0.0
+        if self.gamma:
+            target_energy = self.gamma * torch.mean((target_pred_spectrogram+self.epsilon)**self.beta)
+
         loss = loss + classi_loss + target_energy + sparcity_loss
         
         with torch.no_grad():
@@ -423,8 +433,10 @@ class ConvTasNet(pl.LightningModule):
             repeated_mix = repeated_mix.expand(-1, isolated_mix.shape[1], -1)
             si_sdri = (scale_invariant_signal_distortion_ratio(pred, isolated_mix) - scale_invariant_signal_distortion_ratio(repeated_mix, isolated_mix)).mean()
         
-            self.log('train_MoMi', si_sdri, batch_size=mix.shape[0])
-            self.log("train_loss", loss, batch_size=mix.shape[0])
+            self.log_dict({
+                "train_MoMi": si_sdri,
+                "train_loss": loss,
+            }, batch_size=mix.shape[0], sync_dist=True)
 
         return loss
 
@@ -455,10 +467,12 @@ class ConvTasNet(pl.LightningModule):
         repeated_mix = repeated_mix.expand(-1, isolated_mix.shape[1], -1)
         si_sdri = (scale_invariant_signal_distortion_ratio(pred, isolated_mix) - scale_invariant_signal_distortion_ratio(repeated_mix, isolated_mix)).mean()
 
-        self.log('val_loss', loss, batch_size=mix.shape[0])
-        self.log('val_MoMi', si_sdri, batch_size=mix.shape[0])
-        self.log('val_MSi', msi, batch_size=mix.shape[0])
-        self.log('val_target_SI_SDRi', target_si_sdri, batch_size=mix.shape[0])
+        self.log_dict({
+            'val_loss': loss,
+            'val_MoMi': si_sdri,
+            'val_MSi': msi,
+            'val_target_SI_SDRi': target_si_sdri,
+        }, batch_size=mix.shape[0], sync_dist=True)
 
         return loss
     
@@ -551,7 +565,7 @@ class ConvTasNet(pl.LightningModule):
                 "test_target_si_sdri" : target_si_sdri,
                 "test_beam_target_si_sdri" : beam_target_si_sdri,
                 "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,            
-            }, batch_size=mix.shape[0])
+            }, batch_size=mix.shape[0], sync_dist=True)
         else:
             msi = self.compute_msi(isolated_pred, isolated_sources, mix, labels)
 
@@ -561,7 +575,7 @@ class ConvTasNet(pl.LightningModule):
                 "test_beam_target_si_sdri" : beam_target_si_sdri,
                 "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,
                 "test_msi" : msi,
-            }, batch_size=mix.shape[0])
+            }, batch_size=mix.shape[0], sync_dist=True)
 
     def log_pred(self, pred, ground_truth, mix, labels):
         """
