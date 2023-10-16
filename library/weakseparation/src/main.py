@@ -121,7 +121,9 @@ def main(args):
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator='gpu',
-        devices=-1,
+        devices=torch.cuda.device_count(),
+        num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES")),
+        progress_bar_refresh_rate=0,
         strategy = DDPStrategy(find_unused_parameters=False),
         callbacks=[checkpoint_callback],
         logger=logger,
