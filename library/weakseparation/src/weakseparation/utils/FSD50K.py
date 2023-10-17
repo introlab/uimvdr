@@ -154,7 +154,7 @@ class FSD50KDataset(Dataset):
         self.paths_to_target_data = []
         self.labels = {}
         if self.type != "test":
-            csv_path = os.path.join(dir, "FSD50K.ground_truth", "test.csv")
+            csv_path = os.path.join(dir, "FSD50K.ground_truth", "dev.csv")
         else:
             csv_path = os.path.join(dir, "FSD50K.ground_truth", "eval.csv")
 
@@ -235,7 +235,7 @@ class FSD50KDataset(Dataset):
         # The 16k samples were generated using sox
         # os.system('sox ' + basepath + audiofile+' -r 16000 ' + targetpath + audiofile + '> /dev/null 2>&1')
         if self.type != "test":
-            wav_path = os.path.join(self.dir, "FSD50K.test_audio" ,self.paths_to_target_data[idx] + ".wav")
+            wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav")
         else:
             wav_path = os.path.join(self.dir, "FSD50K.eval_audio" ,self.paths_to_target_data[idx] + ".wav")
 
@@ -288,7 +288,7 @@ class FSD50KDataset(Dataset):
                 additionnal_x = torch.zeros_like(mix)
             else:
                 if self.type != "test":
-                    wav_path = os.path.join(self.dir, "FSD50K.test_audio" ,self.paths_to_data[idx] + ".wav")
+                    wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[idx] + ".wav")
                 else:
                     wav_path = os.path.join(self.dir, "FSD50K.eval_audio" ,self.paths_to_data[idx] + ".wav")
 
@@ -331,7 +331,7 @@ class FSD50KDataset(Dataset):
     
     def get_serialized_sample(self, idx, key=1500):
         idx = idx % len(self.paths_to_target_data)
-        wav_path = os.path.join(self.dir, "FSD50K.test_audio" ,self.paths_to_target_data[idx] + ".wav") 
+        wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav") 
 
         x, file_sample_rate = torchaudio.load(wav_path)
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)

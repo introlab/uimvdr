@@ -123,7 +123,7 @@ def main(args):
         accelerator='gpu',
         devices=torch.cuda.device_count(),
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES")),
-        progress_bar_refresh_rate=0,
+        enable_progress_bar=False,
         strategy = DDPStrategy(find_unused_parameters=False),
         callbacks=[checkpoint_callback],
         logger=logger,
