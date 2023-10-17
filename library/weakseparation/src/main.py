@@ -4,6 +4,7 @@ import weakseparation
 import wandb
 import pytorch_lightning as pl
 import torch
+import datetime
 
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.strategies.ddp import DDPStrategy
@@ -124,7 +125,7 @@ def main(args):
         devices=torch.cuda.device_count(),
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES")),
         enable_progress_bar=False,
-        strategy = DDPStrategy(find_unused_parameters=False),
+        strategy = DDPStrategy(find_unused_parameters=False, timeout=datetime.timedelta(seconds=60*3)),
         callbacks=[checkpoint_callback],
         logger=logger,
         deterministic=False if classification_percentage else True,

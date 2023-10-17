@@ -1,1 +1,1 @@
-sbatch train.sh
+sbatch ~/dev/weakseparation/train.sh
