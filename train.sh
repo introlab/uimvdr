@@ -28,4 +28,4 @@ export NCCL_BLOCKING_WAIT=1 #Pytorch Lightning uses the NCCL backend for inter-G
 #Execution de l'entrainement
 cd weakseparation/library/weakseparation/src
 srun python main.py --train --epochs 2005 --log_path /home/jacobk17/dev/weakseparation/logs \
- --dataset_path $SLURM_TMPDIR/weakseparation/library/dataset --num_of_workers 4 "$@"
+ --dataset_path $SLURM_TMPDIR/weakseparation/library/dataset --num_of_workers 4 --run_id $SLURM_JOB_ID "$@"

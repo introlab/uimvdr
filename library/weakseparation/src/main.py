@@ -31,14 +31,14 @@ def main(args):
 
     if args.log:
         if args.ckpt_path is not None:
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=config_path)
+            logger = WandbLogger(project="mc-weak-separation", id=args.run_id, save_dir=args.log_path, config=config_path)
         else:   
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=args)
+            logger = WandbLogger(project="mc-weak-separation", id=args.run_id, save_dir=args.log_path, config=args)
     else:
         if args.ckpt_path is not None:
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=config_path)
+            logger = WandbLogger(project="mc-weak-separation", id=args.run_id, save_dir=args.log_path, offline=True, config=config_path)
         else:   
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args)
+            logger = WandbLogger(project="mc-weak-separation", id=args.run_id, save_dir=args.log_path, offline=True, config=args)
         
     resume_training = args.resume_training
     target_class = args.target_class
@@ -289,6 +289,12 @@ if __name__ == "__main__":
         type=str,
         default="/home/jacob/dev/weakseparation/library/dataset",
         help="Logging path",
+    )
+    parser.add_argument(
+        "--run_id",
+        type=str,
+        default=None,
+        help="Wandb run id",
     )
 
 
