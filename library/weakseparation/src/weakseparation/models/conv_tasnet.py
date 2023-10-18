@@ -789,7 +789,7 @@ class ConvTasNet(pl.LightningModule):
                 i+=1
             self.logger.log_table(key="isolated results", columns=self.log_columns, data=table)
 
-            wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=16000)})
+            # wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=16000)})
 
             if not self.supervised:
                 pred = self.efficient_mixit(isolated_pred, MoM)
