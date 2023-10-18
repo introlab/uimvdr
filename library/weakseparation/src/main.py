@@ -31,14 +31,14 @@ def main(args):
 
     if args.log:
         if args.ckpt_path is not None:
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=config_path)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=config_path, group="DDP")
         else:   
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=args)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=args, group="DDP")
     else:
         if args.ckpt_path is not None:
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=config_path)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=config_path, group="DDP")
         else:   
-            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args)
+            logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args, group="DDP")
         
     resume_training = logger.experiment.config["resume_training"]
     target_class = logger.experiment.config["target_class"]
