@@ -339,7 +339,7 @@ class ConvTasNet(pl.LightningModule):
         self.log_dict({
             "train_loss": loss,
             "train_MSi": msi,
-        }, batch_size=mix.shape[0], sync_dist=True)
+        }, batch_size=mix.shape[0], sync_dist=True, rank_zero_only=True)
 
         return loss
     
@@ -369,7 +369,7 @@ class ConvTasNet(pl.LightningModule):
             'val_loss': loss,
             'val_MSi': msi,
             'val_target_SI_SDRi': target_si_sdri,
-        }, batch_size=mix.shape[0], sync_dist=True)
+        }, batch_size=mix.shape[0], sync_dist=True, rank_zero_only=True)
 
         return loss
     
@@ -436,7 +436,7 @@ class ConvTasNet(pl.LightningModule):
             self.log_dict({
                 "train_MoMi": si_sdri,
                 "train_loss": loss,
-            }, batch_size=mix.shape[0], sync_dist=True)
+            }, batch_size=mix.shape[0], sync_dist=True, rank_zero_only=True)
 
         return loss
 
@@ -472,7 +472,7 @@ class ConvTasNet(pl.LightningModule):
             'val_MoMi': si_sdri,
             'val_MSi': msi,
             'val_target_SI_SDRi': target_si_sdri,
-        }, batch_size=mix.shape[0], sync_dist=True)
+        }, batch_size=mix.shape[0], sync_dist=True, rank_zero_only=True)
 
         return loss
     
@@ -565,7 +565,7 @@ class ConvTasNet(pl.LightningModule):
                 "test_target_si_sdri" : target_si_sdri,
                 "test_beam_target_si_sdri" : beam_target_si_sdri,
                 "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,            
-            }, batch_size=mix.shape[0], sync_dist=True)
+            }, batch_size=mix.shape[0], sync_dist=True, rank_zero_only=True)
         else:
             msi = self.compute_msi(isolated_pred, isolated_sources, mix, labels)
 
@@ -575,7 +575,7 @@ class ConvTasNet(pl.LightningModule):
                 "test_beam_target_si_sdri" : beam_target_si_sdri,
                 "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,
                 "test_msi" : msi,
-            }, batch_size=mix.shape[0], sync_dist=True)
+            }, batch_size=mix.shape[0], sync_dist=True, rank_zero_only=True)
 
     def log_pred(self, pred, ground_truth, mix, labels):
         """

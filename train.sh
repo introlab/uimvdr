@@ -2,7 +2,7 @@
 #SBATCH --nodes 1             
 #SBATCH --gres=gpu:4         # Request 2 GPU "generic resources”.
 #SBATCH --tasks-per-node=4    # Request 1 process per GPU. You will get 1 CPU per process by default. Request more CPUs with the "cpus-per-task" parameter to enable multiple data-loader workers to load data in parallel.
-#SBATCH --cpus-per-task=5
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=16G      
 #SBATCH --time=0-03:00
 #SBATCH --output=%N-%j.out
@@ -27,5 +27,5 @@ export NCCL_BLOCKING_WAIT=1 #Pytorch Lightning uses the NCCL backend for inter-G
 
 #Execution de l'entrainement
 cd weakseparation/library/weakseparation/src
-python main.py --train --epochs 2005 --log_path /home/jacobk17/dev/weakseparation/logs \
- --dataset_path $SLURM_TMPDIR/weakseparation/library/dataset --num_of_workers 5 "$@"
+srun python main.py --train --epochs 2005 --log_path /home/jacobk17/dev/weakseparation/logs \
+ --dataset_path $SLURM_TMPDIR/weakseparation/library/dataset --num_of_workers 4 "$@"
