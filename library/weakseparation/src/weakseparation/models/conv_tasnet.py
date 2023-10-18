@@ -748,7 +748,7 @@ class ConvTasNet(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         outputs.clear()
 
-        if not self.current_epoch % 100 and isinstance(self.logger, WandbLogger):
+        if not self.current_epoch % 1000 and isinstance(self.logger, WandbLogger):
             mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(15, 1300)
             mix1, isolated_sources1, labels1 = self.trainer.datamodule.dataset_val.get_serialized_sample(10, 1300)
 
