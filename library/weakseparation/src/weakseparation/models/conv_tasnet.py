@@ -676,6 +676,13 @@ class ConvTasNet(pl.LightningModule):
                 beam_oracle_pred = beamformed_oracle[0]
                 beam_oracle_target = beamformed_oracle_target[0]
                 beamformed_target = beamformed_target[0]
+
+                pred_energy = 10*torch.log10((isolated_pred_logging[0]**2).mean())
+                beam_pred = self.rms_normalize(beam_pred, pred_energy)
+
+                oracle_pred_energy = 10*torch.log10((oracle_pred**2).mean())
+                beam_oracle_pred = self.rms_normalize(beam_oracle_pred, oracle_pred_energy)
+
                 i = 0
                 table = []
 
@@ -925,7 +932,16 @@ class ConvTasNet(pl.LightningModule):
         soft_threshold = 10**(-30/10)
         loss = 10*torch.log10((target-pred)**2 + soft_threshold*(target**2) + self.epsilon) - 10*torch.log10(target**2 + self.epsilon)
         return loss.mean()
-
+    
+    @staticmethod
+    def rms_normalize(x, db_value):
+        # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = db_value
+        
+        augmentation_gain = 10 ** (db_value/20)
+        normalize_gain  = torch.sqrt(1/(torch.abs(x)**2).mean()) 
+    
+        return augmentation_gain * normalize_gain * x
+    
     @staticmethod 
     def efficient_mixit(pred, target, return_target_permutation = False, force_target = False):
         least_squares_result = torch.linalg.lstsq(pred.transpose(1,2), target.transpose(1,2)).solution.transpose(1,2)
