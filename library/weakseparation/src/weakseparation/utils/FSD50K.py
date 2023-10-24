@@ -357,7 +357,7 @@ class FSD50KDataset(Dataset):
         additionnal_idx = (idx*key) % (len(self.paths_to_data)-1)
         for source_nb in range(self.max_sources-1):
             if random.random() >= 0.5 or \
-               ((not self.supervised or self.type=="test" or self.type=="val") == int(self.max_sources //2)):
+               ((not self.supervised or self.type=="test" or self.type=="val") and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx += 1
                     additionnal_idx = additionnal_idx % (len(self.paths_to_data))

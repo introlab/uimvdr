@@ -157,7 +157,6 @@ class CustomDataset(Dataset):
             if random.random() >= 0.5 or \
                (source_nb == int(self.max_sources //2)):
                 while True:
-                    additionnal_idx += 1
                     additionnal_idx_class = self.paths_to_data[additionnal_idx].class_name
                     if additionnal_idx_class not in idxs_classes and \
                         not additionnal_idx in additionnal_idxs and \
@@ -165,6 +164,7 @@ class CustomDataset(Dataset):
                         additionnal_idxs.append(additionnal_idx)
                         idxs_classes.append(additionnal_idx_class)
                         break
+                    additionnal_idx += 1
             else:
                 # Empty source
                 additionnal_idxs.append(-1)
