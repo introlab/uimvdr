@@ -315,7 +315,7 @@ class FSD50KDataset(Dataset):
         isolated_sources *= factor
 
         #randomize volume
-        volume = random.random()
+        volume = random.uniform(0.1,1)
 
         mix *= volume
         isolated_sources *= volume
@@ -466,22 +466,22 @@ class FSD50KDataset(Dataset):
     
     @staticmethod
     def rms_normalize(x, augmentation=False):
-        # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = 0
+            # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = 0
 
-        if augmentation:
-            # Gain between -5 and 5 dB
-            aug = torch.rand(1).item()*10 - 5
-            augmentation_gain = 10 ** (aug/20)
-        else:
-            augmentation_gain = 1
+            if augmentation:
+                # Gain between -5 and 5 dB
+                aug = torch.rand(1).item()*10 - 5
+                augmentation_gain = 10 ** (aug/20)
+            else:
+                augmentation_gain = 1
+            
+            normalize_gain  = torch.sqrt(1/((torch.abs(x)**2).mean()+torch.finfo(torch.float).eps)) 
         
-        normalize_gain  = torch.sqrt(1/(torch.abs(x)**2).mean()) 
-       
-        return augmentation_gain * normalize_gain * x
-    
+            return augmentation_gain * normalize_gain * x
+        
     @staticmethod
     def peak_normalize(x):
-        factor = 1/torch.max(torch.abs(x))
+        factor = 1/(torch.max(torch.abs(x))+torch.finfo(torch.float).eps)
         new_x = factor * x
 
         return new_x, factor

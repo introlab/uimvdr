@@ -130,7 +130,7 @@ class CustomDataset(Dataset):
         isolated_sources *= factor
 
         #randomize volume
-        volume = random.random()
+        volume = random.uniform(0.1,1)
 
         mix *= volume
         isolated_sources *= volume
@@ -229,16 +229,17 @@ class CustomDataset(Dataset):
         else:
             augmentation_gain = 1
         
-        normalize_gain  = torch.sqrt(1/(torch.abs(x)**2).mean()) 
-       
-        return augmentation_gain * normalize_gain * x
+        normalize_gain  = torch.sqrt(1/((torch.abs(x)**2).mean()+torch.finfo(torch.float).eps)) 
     
+        return augmentation_gain * normalize_gain * x
+        
     @staticmethod
     def peak_normalize(x):
-        factor = 1/torch.max(torch.abs(x))
+        factor = 1/(torch.max(torch.abs(x))+torch.finfo(torch.float).eps)
         new_x = factor * x
 
         return new_x, factor
+
 
 
 if __name__ == '__main__':
