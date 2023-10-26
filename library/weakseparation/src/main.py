@@ -39,7 +39,7 @@ def main(args):
         else:   
             logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args)
         
-    resume_training = logger.experiment.config["resume_training"]
+    resume_training = args.resume_training
     target_class = logger.experiment.config["target_class"]
     non_mixing_classes = logger.experiment.config["non_mixing_classes"]
     branch_class = logger.experiment.config["branch_class"]
