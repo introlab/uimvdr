@@ -50,19 +50,16 @@ def main(args):
     learning_rate = logger.experiment.config["learning_rate"]
     batch_size = logger.experiment.config["batch_size"]
     num_of_workers = logger.experiment.config["num_of_workers"]
-    alpha = logger.experiment.config["alpha"]
     beta = logger.experiment.config["beta"]
     gamma = logger.experiment.config["gamma"]
     kappa = logger.experiment.config["kappa"]
-    classification_percentage = logger.experiment.config["classification_percentage"]
-
+    
     # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
     # batch_size = 1
     isolated = True if supervised else False
     return_spectrogram = False
     seed = 17
     frame_size = 1024
-    bins = int(frame_size / 2) + 1
     hop_size = int(frame_size / 2)
     max_sources = 4
     num_speakers = 2 if supervised else 3 #pred by NN
@@ -106,15 +103,12 @@ def main(args):
 
     model = weakseparation.ConvTasNet(
         N=frame_size, 
-        H=bins, 
         activate="softmax", 
         num_spks=num_speakers, 
         supervised=supervised,
-        alpha=alpha,
         beta=beta,
         gamma=gamma,
         kappa=kappa,
-        classi_percent=classification_percentage,
         learning_rate=learning_rate
     )
     
@@ -122,10 +116,10 @@ def main(args):
         max_epochs=epochs,
         accelerator='gpu',
         devices=-1,
-        strategy = DDPStrategy(find_unused_parameters=False),
+        strategy = DDPStrategy(find_unused_parameters=True),
         callbacks=[checkpoint_callback],
         logger=logger,
-        deterministic=False if classification_percentage else True,
+        deterministic=True,
         log_every_n_steps=5,
         resume_from_checkpoint=ckpt_path if resume_training else None
     )
