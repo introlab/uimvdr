@@ -39,7 +39,7 @@ def main(args):
         else:   
             logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args)
         
-    resume_training = logger.experiment.config["resume_training"]
+    resume_training = args.resume_training
     target_class = logger.experiment.config["target_class"]
     non_mixing_classes = logger.experiment.config["non_mixing_classes"]
     branch_class = logger.experiment.config["branch_class"]
@@ -79,11 +79,12 @@ def main(args):
             filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
         )
 
-    fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
+    # fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
+    audioset_path = "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset"
     custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
     dm = weakseparation.DataModule(
-        weakseparation.FSD50K.FSD50KDataset,
-        fsd50k_path,
+        weakseparation.AudioSet.AudioSetDataset,
+        audioset_path,
         weakseparation.customDataset.CustomDataset,
         custom_dataset_path,
         target_class=target_class,

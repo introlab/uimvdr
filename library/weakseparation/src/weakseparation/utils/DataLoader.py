@@ -139,23 +139,23 @@ class DataModule(pl.LightningDataModule):
                 return_spectrogram=False,
                 nb_iteration = nb_of_test_iteration,
             )
-            self.dataset_test_fsd50k = self.dataset(
-                self.data_dir, 
-                self.frame_size, 
-                self.hop_size, 
-                type="test",
-                target_class=self.target_class,
-                non_mixing_classes=self.non_mixing_classes,
-                branch_class=self.branch_class,
-                sample_rate=self.sample_rate,
-                max_sources=self.max_sources,
-                nb_of_seconds=self.nb_of_seconds, 
-                forceCPU=True,
-                return_spectrogram=self.return_spectrogram,
-                supervised=self.supervised,
-                isolated=True,
-                nb_iteration = nb_of_test_iteration,
-            )
+            # self.dataset_test_fsd50k = self.dataset(
+            #     self.data_dir, 
+            #     self.frame_size, 
+            #     self.hop_size, 
+            #     type="test",
+            #     target_class=self.target_class,
+            #     non_mixing_classes=self.non_mixing_classes,
+            #     branch_class=self.branch_class,
+            #     sample_rate=self.sample_rate,
+            #     max_sources=self.max_sources,
+            #     nb_of_seconds=self.nb_of_seconds, 
+            #     forceCPU=True,
+            #     return_spectrogram=self.return_spectrogram,
+            #     supervised=self.supervised,
+            #     isolated=True,
+            #     nb_iteration = nb_of_test_iteration,
+            # )
 
     def train_dataloader(self):
         return DataLoader(
@@ -198,13 +198,13 @@ class DataModule(pl.LightningDataModule):
             shuffle=False,
             persistent_workers=False,
         ),
-        DataLoader(
-            self.dataset_test_fsd50k,
-            batch_size=self.batch_size,
-            num_workers=self.num_of_workers,
-            shuffle=False,
-            persistent_workers=False,
-        ),
+        # DataLoader(
+        #     self.dataset_test_fsd50k,
+        #     batch_size=self.batch_size,
+        #     num_workers=self.num_of_workers,
+        #     shuffle=False,
+        #     persistent_workers=False,
+        # ),
         ]
 
 
