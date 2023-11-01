@@ -66,20 +66,13 @@ def main(args):
 
     pl.seed_everything(seed, workers=True)
 
-    if not supervised:
-        checkpoint_callback = ModelCheckpoint(
-            monitor='val_MoMi',
-            mode = 'max',
-            filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_MoMi:.3f}'
-        )
-    else:
-        checkpoint_callback = ModelCheckpoint(
-            monitor='val_target_SI_SDRi',
-            mode = 'max',
-            filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
-        )
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_target_SI_SDRi',
+        mode = 'max',
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
+    )
 
-    # fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
+    fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
     audioset_path = "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset"
     custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
     dm = weakseparation.DataModule(
@@ -121,12 +114,13 @@ def main(args):
         callbacks=[checkpoint_callback],
         logger=logger,
         deterministic=True,
-        log_every_n_steps=5,
-        resume_from_checkpoint=ckpt_path if resume_training else None
+        log_every_n_steps=5
     )
 
     if args.train:
-        trainer.fit(model=model, datamodule=dm)
+        trainer.fit(model=model, 
+                    datamodule=dm,
+                    ckpt_path=ckpt_path if resume_training else None)
 
     if args.predict:
         if not args.resume_training and os.path.exists(ckpt_path):

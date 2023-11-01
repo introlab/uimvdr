@@ -197,7 +197,7 @@ class ConvTasNet(pl.LightningModule):
                  beta=1,
                  gamma=0.5,
                  kappa=0.001,
-                 norm="fLN",
+                 norm="gLN",
                  num_spks=2,
                  activate="relu",
                  causal=False,
