@@ -51,11 +51,9 @@ def main(args):
     learning_rate = args.learning_rate
     batch_size = args.batch_size
     num_of_workers = args.num_of_workers
-    alpha = args.alpha
     beta = args.beta
     gamma = args.gamma
     kappa = args.kappa
-    classification_percentage = args.classification_percentage
 
     # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
     # batch_size = 1
@@ -63,25 +61,17 @@ def main(args):
     return_spectrogram = False
     seed = 17
     frame_size = 1024
-    bins = int(frame_size / 2) + 1
     hop_size = int(frame_size / 2)
     max_sources = 4
     num_speakers = 2 if supervised else 3 #pred by NN
 
     pl.seed_everything(seed, workers=True)
 
-    if not supervised:
-        checkpoint_callback = ModelCheckpoint(
-            monitor='val_MoMi',
-            mode = 'max',
-            filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_MoMi:.3f}'
-        )
-    else:
-        checkpoint_callback = ModelCheckpoint(
-            monitor='val_target_SI_SDRi',
-            mode = 'max',
-            filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
-        )
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_target_SI_SDRi',
+        mode = 'max',
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
+    )
 
     fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
     custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
@@ -107,15 +97,12 @@ def main(args):
 
     model = weakseparation.ConvTasNet(
         N=frame_size, 
-        H=bins, 
         activate="softmax", 
         num_spks=num_speakers, 
         supervised=supervised,
-        alpha=alpha,
         beta=beta,
         gamma=gamma,
         kappa=kappa,
-        classi_percent=classification_percentage,
         learning_rate=learning_rate
     )
     
@@ -125,16 +112,17 @@ def main(args):
         devices=torch.cuda.device_count(),
         num_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES")),
         enable_progress_bar=False,
-        strategy = DDPStrategy(find_unused_parameters=False, timeout=datetime.timedelta(seconds=60*3)),
+        strategy = DDPStrategy(find_unused_parameters=True, timeout=datetime.timedelta(seconds=60*3)),
         callbacks=[checkpoint_callback],
         logger=logger,
-        deterministic=False if classification_percentage else True,
-        log_every_n_steps=5,
-        resume_from_checkpoint=ckpt_path if resume_training else None
+        deterministic=True,
+        log_every_n_steps=5
     )
 
     if args.train:
-        trainer.fit(model=model, datamodule=dm)
+        trainer.fit(model=model, 
+                    datamodule=dm,
+                    ckpt_path=ckpt_path if resume_training else None)
 
     if args.predict:
         if not args.resume_training and os.path.exists(ckpt_path):

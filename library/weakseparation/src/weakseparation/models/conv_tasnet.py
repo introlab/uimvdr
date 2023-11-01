@@ -24,7 +24,7 @@ from torchmetrics.functional.audio import signal_noise_ratio, scale_invariant_si
 from pytorch_lightning.loggers import WandbLogger
 
 
-class ChannelWiseLayerNorm(pl.LightningModule):
+class ChannelWiseLayerNorm(nn.LayerNorm):
     """
     Channel wise layer normalization
     """
@@ -93,67 +93,47 @@ def select_norm(norm, dim):
     Build normalize layer
     LN cost more memory than BN
     """
-    if norm not in ["cLN", "gLN", "BN"]:
+    if norm not in ["cLN", "gLN", "BN", "fLN"]:
         raise RuntimeError("Unsupported normalize layer: {}".format(norm))
     if norm == "cLN":
         return ChannelWiseLayerNorm(dim, elementwise_affine=True)
     elif norm == "BN":
         return nn.BatchNorm1d(dim)
+    elif norm == "fLN":
+        return nn.InstanceNorm1d(dim)
     else:
         return GlobalChannelLayerNorm(dim, elementwise_affine=True)
 
 
 class Conv1D_Block(nn.Module):
-    def __init__(self, in_channels=128, out_channels=512, kernel_size=3, dilation=1, norm_type='gLN'):
+    def __init__(self, in_channels=128, out_channels=512, kernel_size=3, dilation=1, norm_type='gLN', layer=0):
         super(Conv1D_Block, self).__init__()
         self.conv1x1 = nn.Conv1d(in_channels, out_channels, 1)
+        self.scale1 = nn.Parameter(torch.tensor([1.0]))
         self.prelu1 = nn.PReLU()
         self.norm1 = select_norm(norm_type, out_channels)
-        if norm_type == 'gLN':
+        if norm_type == 'gLN' or norm_type == 'fLN':
             self.padding = (dilation*(kernel_size-1))//2
         else:
             self.padding = dilation*(kernel_size-1)
         self.dwconv = nn.Conv1d(out_channels, out_channels, kernel_size,
-                                1, dilation=dilation, padding=self.padding, groups=out_channels, bias=True)
+                                1, dilation=dilation, padding=self.padding, groups=out_channels)
         self.prelu2 = nn.PReLU()
         self.norm2 = select_norm(norm_type, out_channels)
-        self.sconv = nn.Conv1d(out_channels, in_channels, 1, bias=True)
-        self.norm_type = norm_type
+        self.sconv = nn.Conv1d(out_channels, in_channels, 1)
+        self.scale2 = nn.Parameter(torch.tensor([0.9**layer]))
+        self.skip_connection = nn.Conv1d(out_channels, in_channels, 1)
 
     def forward(self, x):
-        w = self.conv1x1(x)
+        w = self.conv1x1(x) * self.scale1
         w = self.norm1(self.prelu1(w))
         w = self.dwconv(w)
-        if self.norm_type == 'cLN':
-            w = w[:, :, :-self.padding]
         w = self.norm2(self.prelu2(w))
-        w = self.sconv(w)
-        x = x + w
-        return x
+        skip = self.skip_connection(w)
 
-
-class TCN(nn.Module):
-    def __init__(self, in_channels=128, out_channels=512, kernel_size=3, norm_type='gLN', X=8):
-        super(TCN, self).__init__()
-        seq = []
-        for i in range(X):
-            seq.append(Conv1D_Block(in_channels=in_channels, out_channels=out_channels,
-                                    kernel_size=kernel_size, norm_type=norm_type, dilation=2**i))
-        self.tcn = nn.Sequential(*seq)
-
-    def forward(self, x):
-        return self.tcn(x)
-
-
-class Separation(nn.Module):
-    def __init__(self, in_channels=128, out_channels=512, kernel_size=3, norm_type='gLN', X=8, R=3):
-        super(Separation, self).__init__()
-        s = [TCN(in_channels=in_channels, out_channels=out_channels,
-                 kernel_size=kernel_size, norm_type=norm_type, X=X) for i in range(R)]
-        self.sep = nn.Sequential(*s)
-
-    def forward(self, x):
-        return self.sep(x)
+        x = self.sconv(w) * self.scale2
+        
+        return skip, skip
 
 
 class Encoder(nn.Module):
@@ -191,7 +171,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, in_channels=512, out_channels=1, kernel_size=16):
+    def __init__(self, in_channels=512):
         super(Decoder, self).__init__()
         # self.decoder = nn.ConvTranspose1d(
         #     in_channels, out_channels, kernel_size, kernel_size//2, padding=0, bias=True)
@@ -209,14 +189,11 @@ class Decoder(nn.Module):
 class ConvTasNet(pl.LightningModule):
     def __init__(self,
                  N=1024,
-                 L=16,
-                 B=128,
-                 H=513,
+                 B=256,
+                 H=512,
                  P=3,
                  X=8,
-                 R=3,
-                 classi_percent=0.5,
-                 alpha=1,
+                 R=4,
                  beta=1,
                  gamma=0.5,
                  kappa=0.001,
@@ -229,10 +206,14 @@ class ConvTasNet(pl.LightningModule):
                  ):
         super(ConvTasNet, self).__init__()
         # -----------------------model-----------------------
-        self.encoder = Encoder(1, N, B, L, norm)
-        self.separation = Separation(B, H, P, norm, X, R)
-        self.decoder = Decoder(N, 1, L)
-        self.mask = nn.Conv1d(B, H*num_spks, 1, 1)
+        self.encoder = Encoder(1, N, B, norm)
+        self.separation = self._Sequential_repeat(
+            R, X, in_channels=B, out_channels=H, kernel_size=P, norm_type=norm
+        )
+        self.decoder = Decoder(N)
+        self.final_prelu = nn.PReLU()
+        bins = int(N / 2) + 1
+        self.mask = nn.Conv1d(B, bins*num_spks, 1, 1)
         supported_nonlinear = {
             "relu": F.relu,
             "sigmoid": torch.sigmoid,
@@ -250,21 +231,14 @@ class ConvTasNet(pl.LightningModule):
         self.gamma = gamma
         self.beta = beta
         self.kappa = kappa
+        self.num_blocks = X
+        self.index_of_last_skip = R*X - X
+        nb_of_longterm_skip = int(self.index_of_last_skip/X)
+        longterm_skip_lists = []
+        for i in range(nb_of_longterm_skip):
+            longterm_skip_lists += [nn.Conv1d(B, B, 1)]
+        self.longterm_skip = nn.ModuleList(longterm_skip_lists)
 
-        # Classification
-        self.classi_percentage = classi_percent
-        # if classi_percent > 0:
-        #     sd = torch.load('/home/jacob/dev/weakseparation/library/weakseparation/src/best_models/fsd_mdl_wa.pth', map_location=self.device)
-        #     self.classi_model = EffNetAttention(label_dim=200, b=2, pretrain=False, head_num=4)
-        #     self.classi_model = torch.nn.DataParallel(self.classi_model)
-        #     self.classi_model.load_state_dict(sd, strict=False)
-        #     self.classi_model.eval()
-        #     self.classi_epsilon = 1e-7
-        #     self.classi_audio_conf = {'num_mel_bins': 128, 'target_length': 3000, 'freqm': 0, 'timem': 0, 'mixup': 0,
-        #                             'dataset': "FSD50K", 'mode': 'evaluation', 'mean': -4.6476,
-        #                             'std': 4.5699, 'noise': False}
-        #     self.classi_loss_fnct = torch.nn.BCELoss()
-        #     self.alpha = alpha
 
         # Beamforming
         self.scm_transform = torchaudio.transforms.PSD()
@@ -272,9 +246,51 @@ class ConvTasNet(pl.LightningModule):
 
         self.save_hyperparameters()
 
+    def _Sequential_block(self, num_blocks, **block_kwargs):
+        '''
+           Sequential 1-D Conv Block
+           input:
+                 num_block: how many blocks in every repeats
+                 **block_kwargs: parameters of Conv1D_Block
+        '''
+        Conv1D_Block_lists = [Conv1D_Block(
+            **block_kwargs, dilation=(2**i)) for i in range(num_blocks)]
+
+        return Conv1D_Block_lists
+
+    def _Sequential_repeat(self, num_repeats, num_blocks, **block_kwargs):
+        '''
+           Sequential repeats
+           input:
+                 num_repeats: Number of repeats
+                 num_blocks: Number of block in every repeats
+                 **block_kwargs: parameters of Conv1D_Block
+        '''
+        repeats_lists = []
+        for i in range(num_repeats):
+            repeats_lists += self._Sequential_block(
+                num_blocks, **block_kwargs)
+        return nn.ModuleList(repeats_lists)
+
     def forward(self, waveform, return_target_spectrogram=False, return_mask=False):
         x, w = self.encoder(waveform)
-        w = self.separation(w)
+
+        # Separation w/ skip connections
+        short_term_skip_connection = torch.zeros((w.shape[0], w.shape[1], w.shape[2]), device=w.device)
+        long_term_skip_connections = []
+        for i in range(len(self.separation)):
+            if not i%self.num_blocks and i <= self.index_of_last_skip:
+                for connection in long_term_skip_connections:
+                    w += connection
+                long_term_index = int(i/self.num_blocks)
+                if i < self.index_of_last_skip:
+                    long_term_skip_connections.append(self.longterm_skip[long_term_index](w))
+
+            w, skip = self.separation[i](w)
+            short_term_skip_connection += skip
+        w = short_term_skip_connection
+
+        w = self.final_prelu(w)
         m = self.mask(w)
         m = torch.chunk(m, chunks=self.num_spks, dim=1)
         m = self.non_linear(torch.stack(m, dim=0), dim=0)
@@ -389,34 +405,6 @@ class ConvTasNet(pl.LightningModule):
 
         loss = self.negative_SNR(pred, isolated_mix) 
 
-        # Classification
-        classi_loss = 0.0
-        if random.random()<self.classi_percentage:
-            # Need to manually clear classification model grad because not in optimzer and lightning calls optimizer.grad
-            self.classi_model.zero_grad()
-
-            #TODO: Make it functional for more than the first 2 when training on bigger GPU
-            target_pred = isolated_pred[:2].transpose(0,1)
-            for idx, source in enumerate(target_pred):
-                fbank_target = torch.zeros(source.shape[0], self.classi_audio_conf["target_length"], self.classi_audio_conf["num_mel_bins"])
-                for i, waveform in enumerate(source):
-                    fbank_target[i] = self.wav2fbank(waveform[None, ...])
-                prediction = self.classi_model(fbank_target)
-                prediction = torch.clamp(prediction, self.classi_epsilon, 1. - self.classi_epsilon)
-
-                if idx>=1:
-                    # TODO: pass ignore index as parameters
-                    # Just to test for now: Bark and Dog
-                    indices = torch.tensor([7,59], dtype=torch.long)
-                    ignore_prediction = prediction[:, indices]
-                    label_ground_truth = torch.zeros_like(ignore_prediction, dtype=torch.float32)
-                    classi_loss += self.classi_loss_fnct(ignore_prediction, label_ground_truth)
-                else:
-                    classi_loss += self.classi_loss_fnct(prediction, classi_labels[:2])
-
-            classi_loss = self.alpha*classi_loss
-            self.log('train_classi_loss', classi_loss)
-
         sparcity_loss = 0.0
         if self.kappa:
             rms = torch.square(torch.mean(isolated_pred**2, dim=-1))
@@ -426,7 +414,7 @@ class ConvTasNet(pl.LightningModule):
         if self.gamma:
             target_energy = self.gamma * torch.mean((target_pred_spectrogram+self.epsilon)**self.beta)
 
-        loss = loss + classi_loss + target_energy + sparcity_loss
+        loss = loss + target_energy + sparcity_loss
         
         with torch.no_grad():
             repeated_mix = mix[:, None, :]
