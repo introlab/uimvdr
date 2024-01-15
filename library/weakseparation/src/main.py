@@ -16,7 +16,11 @@ def main(args):
     ckpt_path=""
     if args.ckpt_path is not None:
         files = [os.path.join(dirpath,f) for (dirpath, dirnames, filenames) in os.walk(args.ckpt_path) for f in filenames]
-        ckpt_path = files[0]
+        if args.resume_training:
+            keyword = "last"
+        else:
+            keyword = "convtasnet"
+        ckpt_path = [s for s in files if keyword in s][0]
         run_id = ckpt_path.split("/")[-3]
         root = args.ckpt_path.split("/")[0:-2]
         root = "/".join(root)
@@ -46,7 +50,7 @@ def main(args):
     sample_rate = logger.experiment.config["sample_rate"]
     supervised = logger.experiment.config["supervised"]
     nb_of_seconds = logger.experiment.config["secs"]
-    epochs = logger.experiment.config["epochs"]
+    epochs = args.epochs
     learning_rate = logger.experiment.config["learning_rate"]
     batch_size = logger.experiment.config["batch_size"]
     num_of_workers = logger.experiment.config["num_of_workers"]
@@ -69,15 +73,15 @@ def main(args):
     checkpoint_callback = ModelCheckpoint(
         monitor='val_target_SI_SDRi',
         mode = 'max',
-        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}',
+        save_last=True
     )
 
-    fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
-    audioset_path = "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset"
+    audioset_path = os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset")
     custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
     dm = weakseparation.DataModule(
-        weakseparation.AudioSet.AudioSetDataset,
-        audioset_path,
+        weakseparation.FSD50KDataset,
+        args.dataset_path,
         weakseparation.customDataset.CustomDataset,
         custom_dataset_path,
         target_class=target_class,
@@ -114,7 +118,8 @@ def main(args):
         callbacks=[checkpoint_callback],
         logger=logger,
         deterministic=True,
-        log_every_n_steps=5
+        log_every_n_steps=5,
+        resume_from_checkpoint=ckpt_path if resume_training else None
     )
 
     if args.train:

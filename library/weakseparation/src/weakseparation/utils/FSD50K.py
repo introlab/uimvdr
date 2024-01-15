@@ -4,7 +4,8 @@ import csv
 import torchaudio
 import torch
 import random
-import h5py
+import pandas
+import numpy as np
 
 from .Windows import sqrt_hann_window
 # from Windows import sqrt_hann_window
@@ -101,6 +102,25 @@ class OntNode():
 
 
 class FSD50KDataset(Dataset):
+    """
+        FSD50K Dataset. When the target is speech, the data comes from Librispeech
+
+        Args:
+            dir (str): Directory for test dataset
+            frame_size (int): Frame size for fft/ifft
+            hop_size (int): Hop size for fft/ifft
+            target_class (list of str): Classes that are considered for the target
+            non_mixing_classes (list of str): Classes that should not be in noise
+            branch_class (str): Isolated target needs to come from this branch class, useful when target is less specific like speech
+            type (str): train, val or test
+            sample_rate (int): sampling rate for audio samples
+            max_sources (int): Maximum number of sources for mixing, should always be 2 or more
+            forceCPU (bool): load with cpu or gpu
+            supervised (bool): Whether to load the data for supervised or unsupervised training           
+            nb_iteration (int): Number of iteration on the targets that should be done for 1 epoch
+            nb_of_seconds (int): Number of seconds the audio sample should be
+            isolated (bool): Whether the audio samples should be isolated or not (useful for supervision)
+    """
     def __init__(self, 
                  dir,
                  frame_size, 
@@ -113,7 +133,6 @@ class FSD50KDataset(Dataset):
                  max_sources=3, 
                  forceCPU=False, 
                  return_spectrogram=True, 
-                 rir=False,
                  supervised=True,
                  nb_iteration=1,
                  nb_of_seconds=3,
@@ -125,7 +144,6 @@ class FSD50KDataset(Dataset):
         self.nb_of_seconds = nb_of_seconds
         self.non_mixing_classes = non_mixing_classes
         self.type = type
-        self.rir = rir
         self.return_spectrogram = return_spectrogram
         self.supervised = supervised
         self.nb_iteration = nb_iteration
@@ -134,11 +152,11 @@ class FSD50KDataset(Dataset):
         else:
             self.isolated = isolated
         self.ontology_dict = {}
-        ontology = json.load(open(os.path.join(dir, "FSD50K.ground_truth", "ontology.json")))
+        ontology = json.load(open(os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "ontology.json")))
         for item in ontology:
             self.ontology_dict[item["id"]] = item
         name_to_id = {v['name']: k for k, v in self.ontology_dict.items()}
-        self.index_dict = make_index_dict(os.path.join(dir, "FSD50K.ground_truth", "class_labels_indices.csv"))
+        self.index_dict = make_index_dict(os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "class_labels_indices.csv"))
         tree = get_tree(self.index_dict, ontology)
 
         if forceCPU:
@@ -153,10 +171,21 @@ class FSD50KDataset(Dataset):
         self.paths_to_data = []
         self.paths_to_target_data = []
         self.labels = {}
+        speech_set = {"Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"}
+        self.speech = True if not set(target_class).isdisjoint(speech_set) else False
         if self.type != "test":
-            csv_path = os.path.join(dir, "FSD50K.ground_truth", "dev.csv")
+            csv_path = os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "dev.csv")
+            if self.speech:
+                if self.type == "train":
+                    rir_folds = rir_folds = list(range(1,81))
+                elif self.type == "test":
+                    rir_folds = rir_folds = list(range(81,96))
+                elif self.type == "val":
+                    rir_folds = rir_folds = list(range(96,101))  
         else:
-            csv_path = os.path.join(dir, "FSD50K.ground_truth", "eval.csv")
+            if self.speech:
+                rir_folds = rir_folds = list(range(96,101))
+            csv_path = os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "eval.csv")
 
         target_id = set([name_to_id[cls] for cls in target_class])
         non_mixing_set = set([name_to_id[cls] for cls in self.non_mixing_classes])
@@ -166,6 +195,10 @@ class FSD50KDataset(Dataset):
             for idx, row in enumerate(csvreader):
                 if (self.type == "test" or row[3] == self.type) and idx != 0:
                     ids = set(row[2].split(","))
+                    if self.type != "test":
+                        wav_path = os.path.join(self.dir, "FSD50K", "FSD50K.dev_audio", row[0] + ".wav")
+                    else:
+                        wav_path = os.path.join(self.dir, "FSD50K", "FSD50K.eval_audio", row[0] + ".wav")
                     if isolated:
                         multiple_leaf_class = False
                         one_leaf_class = False
@@ -183,29 +216,47 @@ class FSD50KDataset(Dataset):
                                 if not one_leaf_class:
                                     one_leaf_class = True
 
-                        # if not isolated or (one_leaf_class and not multiple_leaf_class) or \
-                        # (not one_leaf_class and not multiple_leaf_class):
-                        if not isolated or (one_leaf_class and not multiple_leaf_class):
+                        #TODO: Simplify this
+                        if one_leaf_class and not multiple_leaf_class:
                             if not target_id.isdisjoint(ids) and one_branch:
-                                self.paths_to_target_data.append(row[0]) 
+                                self.paths_to_target_data.append(wav_path) 
                             else:
                                 if non_mixing_set.isdisjoint(ids):
-                                    self.paths_to_data.append(row[0])
-                            self.labels[row[0]] = row[1]
+                                    self.paths_to_data.append(wav_path)
+                            self.labels[wav_path] = row[1]
                     else:
                         if not target_id.isdisjoint(ids):
-                            self.paths_to_target_data.append(row[0]) 
+                            self.paths_to_target_data.append(wav_path) 
                         else:
                             if non_mixing_set.isdisjoint(ids):
-                                self.paths_to_data.append(row[0])
-                        self.labels[row[0]] = row[1]
+                                self.paths_to_data.append(wav_path)
+                        self.labels[wav_path] = row[1]
 
-        if self.rir:
-            library_root = "/".join(__file__.split("/")[:-5])
-            self.path_to_rirs = os.path.join(library_root, "dataset", "dEchorate", "dEchorate_rir.h5")
-            self.rir_dataset = h5py.File(self.path_to_rirs, mode='r')
-            self.rooms = list(self.rir_dataset['rir'].keys())
-            self.sources = list(self.rir_dataset['rir'][self.rooms[0]].keys())
+        if self.speech:
+            self.paths_to_target_data = []
+            if self.type == "train":
+                root = os.path.join(self.dir, "Librispeech", "train")
+            elif self.type == "val":
+                root = os.path.join(self.dir, "Librispeech", "val")
+            elif self.type == "test":
+                root = os.path.join(self.dir, "Librispeech", "test")
+            for path, subdirs, files in os.walk(root):
+                for name in files:
+                    if name[-5:] == ".flac":
+                        filename = os.path.join(path, name)
+                        self.paths_to_target_data.append(filename)
+                        self.labels[filename] = "Librispeech"
+
+        if self.speech:
+            self.path_to_rirs = os.path.join(dir, "Bird")
+            self._rirs = None
+            for fold in rir_folds:
+                rir_directory = os.path.join(self.path_to_rirs, 'fold%03u' % fold)
+                csv_file = os.path.join(rir_directory, 'fold%03u.csv' % fold)
+                df = pandas.read_csv(csv_file)
+                df.insert(0, 'fold', fold)
+                self._rirs = pandas.concat([self._rirs, df])
+
         
         self.stft = torchaudio.transforms.Spectrogram(
             n_fft=frame_size,
@@ -218,48 +269,36 @@ class FSD50KDataset(Dataset):
             n_fft=frame_size, hop_length=hop_size, window_fn=sqrt_hann_window
         )
 
-    def get_child_classes(self, list_of_children):
-        all_children = []
-        for child in list_of_children:
-            all_children.append(child)
-            if children_of_child := self.get_child_classes(self.ontology_dict[child]['child_ids']):
-                all_children.extend(children_of_child)
-
-        return all_children
-
     def __len__(self):
+        """
+            Number of items in dataset
+        """
         return len(self.paths_to_target_data)*self.nb_iteration
     
     def __getitem__(self, idx):
-        idx = idx % len(self.paths_to_target_data)
-        # The 16k samples were generated using sox
-        # os.system('sox ' + basepath + audiofile+' -r 16000 ' + targetpath + audiofile + '> /dev/null 2>&1')
-        if self.type != "test":
-            wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav")
-        else:
-            wav_path = os.path.join(self.dir, "FSD50K.eval_audio" ,self.paths_to_target_data[idx] + ".wav")
+        """
+            Getter for data in data set.
 
-        x, file_sample_rate = torchaudio.load(wav_path)
+            Args:
+                idx (int): From 0 to lenght of dataset obtain with len(self)
+        """
+        idx = idx % len(self.paths_to_target_data)
+        x, file_sample_rate = torchaudio.load(self.paths_to_target_data[idx])
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
         x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=True)
 
-        if torch.sum(torch.isnan(x)):
-            print("Target Nan")
-            print(self.paths_to_target_data[idx] + ".wav")
+        if self.labels[self.paths_to_target_data[idx]] == "Librispeech":
+            mic_idx = random.randint(0, 7)
+            rir_idx = idx % len(self._rirs)
+            item = self._rirs.iloc[rir_idx]
+            key = item['id']
+            fold = item['fold']
 
-        # Label for clasification
-        if not self.supervised:
-            classification_label = torch.zeros(200, device=self.device, dtype=torch.float32)
-            for label_str in self.labels[self.paths_to_target_data[idx]].split(','):
-                classification_label[int(self.index_dict[label_str])] = 1.0
+            rir_path = os.path.join(self.path_to_rirs, 'fold%03u' % fold, key[0], key[1], key + ".flac")
+            rir, _ = torchaudio.load(rir_path)
 
-        if self.rir:
-            room = random.randint(0, len(self.rooms)-1)
-            array_idx = random.randint(0, 5) * 5 
-            source_list = []
-            rir = self.select_rir(source_list, room, array_idx)
-            x = self.apply_rir(rir, x[0])[None,0,:]
+            x = self.apply_rir(rir[mic_idx], x[0])[None,:]
 
         mix = self.rms_normalize(x, True)
 
@@ -269,7 +308,7 @@ class FSD50KDataset(Dataset):
         idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
         for source_nb in range(self.max_sources-1):
             # Make sure that there is not nothing in the second mix
-            if random.random() >= 0.5 or \
+            if random.random() >= -1 or \
                ((not self.supervised or self.type=="test" or self.type=="val") and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
@@ -287,25 +326,12 @@ class FSD50KDataset(Dataset):
             if index == -1:
                 additionnal_x = torch.zeros_like(mix)
             else:
-                if self.type != "test":
-                    wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[idx] + ".wav")
-                else:
-                    wav_path = os.path.join(self.dir, "FSD50K.eval_audio" ,self.paths_to_data[idx] + ".wav")
-
-                additionnal_x, file_sample_rate = torchaudio.load(wav_path)
+                additionnal_x, file_sample_rate = torchaudio.load(self.paths_to_data[index])
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=True)
-
-                if self.rir:
-                    rir = self.select_rir(source_list, room, array_idx)
-                    additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
                               
                 additionnal_x = self.rms_normalize(additionnal_x, True)
-
-                if torch.sum(torch.isnan(additionnal_x)):
-                    print(self.paths_to_data[index] + ".wav")
-                    additionnal_x = torch.zeros_like(additionnal_x)
 
                 mix += additionnal_x
 
@@ -324,29 +350,33 @@ class FSD50KDataset(Dataset):
             mix = self.stft(mix)
             isolated_sources = self.stft(isolated_sources)
 
-        if not self.supervised and self.type != "test":
-            return mix, isolated_sources, idxs_classes, classification_label
-        else:
-            return mix, isolated_sources, idxs_classes
+        return mix, isolated_sources, idxs_classes
     
     def get_serialized_sample(self, idx, key=1500):
-        idx = idx % len(self.paths_to_target_data)
-        wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_target_data[idx] + ".wav") 
+        """
+            Getter that doesn't have radomness for logging
 
-        x, file_sample_rate = torchaudio.load(wav_path)
+            Args:
+                idx (int): From 0 to lenght of dataset obtain with len(self)
+                key (int): Number for getting the additional sources without randomness
+        """
+        idx = idx % len(self.paths_to_target_data)
+        x, file_sample_rate = torchaudio.load(self.paths_to_target_data[idx])
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
         x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=False)
 
-        if self.rir:
-            room = 0
-            array_idx = 0 
+        if self.labels[self.paths_to_target_data[idx]] == "Librispeech":
+            mic_idx = random.randint(0, 7)
+            rir_idx = idx % len(self._rirs)
+            item = self._rirs.iloc[rir_idx]
+            rir_key = item['id']
+            fold = item['fold']
 
-            rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[0]][()][:,array_idx:array_idx+5]
-            rir = rir.transpose()
-            rir = torch.tensor(rir).to(torch.float32)
-            rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
-            x = self.apply_rir(rir, x[0])[None,0,:]
+            rir_path = os.path.join(self.path_to_rirs, 'fold%03u' % fold, rir_key[0], rir_key[1], rir_key + ".flac")
+            rir, _ = torchaudio.load(rir_path)
+
+            x = self.apply_rir(rir[mic_idx], x[0])[None,:]
 
         mix = self.rms_normalize(x, False)
 
@@ -375,18 +405,10 @@ class FSD50KDataset(Dataset):
             if index == -1:
                 additionnal_x = torch.zeros_like(additional_mix)
             else:
-                wav_path = os.path.join(self.dir, "FSD50K.dev_audio" ,self.paths_to_data[index] + ".wav") 
-                additionnal_x, file_sample_rate = torchaudio.load(wav_path)
+                additionnal_x, file_sample_rate = torchaudio.load(self.paths_to_data[index])
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
-
-                if self.rir:
-                    rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[num_of_additionnal+1]][()][:,array_idx:array_idx+5]
-                    rir = rir.transpose()
-                    rir = torch.tensor(rir).to(torch.float32)
-                    rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
-                    additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
 
                 additionnal_x = self.rms_normalize(additionnal_x, False)
                 
@@ -410,6 +432,17 @@ class FSD50KDataset(Dataset):
     
     @staticmethod
     def get_right_number_of_samples(x, sample_rate, seconds, shuffle=False):
+        """
+            If the waveform is too short pad it to make it the nubmer of seconds desired else if it's too long
+            cut it.
+
+            Args:
+                x (Tensor): Waveform with shape (..., time)
+                sample_rate (int): Sample rate of the waveform
+                seconds (int): Desired number of seconds
+                shuffle (bool): If cutting, select radomn a random segment else take the first segment. If padding pad 
+                                randomly each side else pad equally.
+        """
         nb_of_samples = seconds*sample_rate
         if x.shape[1] < nb_of_samples:
             missing_nb_of_samples = nb_of_samples-x.shape[1]
@@ -431,55 +464,48 @@ class FSD50KDataset(Dataset):
         return x
     
     @staticmethod
-    def apply_rir(rirs, source):
+    def apply_rir(rir, source):
         """
         Method to apply multichannel RIRs to a mono-signal.
+
         Args:
             rirs (tensor): Multi-channel RIR,   shape = (channels, frames)
             source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
         """
-        channels = rirs.shape[0]
         frames = len(source)
-        output = torch.empty((channels, frames))
+        output = np.convolve(source.cpu().numpy(), rir.cpu().numpy())[:frames]
 
-        for channel_index in range(channels):
-            output[channel_index] = torch.tensor(
-                signal.convolve(source.cpu().numpy(), rirs[channel_index].cpu().numpy())[:frames]
-            )
-
-        return output
-    
-    def select_rir(self, source_list, room, array_idx):
-        while (rir_source := random.randint(0, len(self.sources)-1)) in source_list:
-            pass
-
-        source_list.append(rir_source)
-
-        rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[rir_source]][()][:,array_idx:array_idx+5]
-        rir = rir.transpose()
-        rir = torch.tensor(rir).to(torch.float32)
-        rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
-    
-        return rir
-
+        return torch.tensor(output)
     
     @staticmethod
     def rms_normalize(x, augmentation=False):
-            # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = 0
+        """
+            Solves this equation: 10*torch.log10((torch.abs(x)**2).mean()) = 0
 
-            if augmentation:
-                # Gain between -5 and 5 dB
-                aug = torch.rand(1).item()*10 - 5
-                augmentation_gain = 10 ** (aug/20)
-            else:
-                augmentation_gain = 1
-            
-            normalize_gain  = torch.sqrt(1/((torch.abs(x)**2).mean()+torch.finfo(torch.float).eps)) 
+            Args:
+                x (Tensor): Data to normalize
+                augmentation (bool): Whether to normalize to 0 dB or a gain between -5 and 5 dB.
+        """
+
+        if augmentation:
+            # Gain between -5 and 5 dB
+            aug = torch.rand(1).item()*10 - 5
+            augmentation_gain = 10 ** (aug/20)
+        else:
+            augmentation_gain = 1
         
-            return augmentation_gain * normalize_gain * x
+        normalize_gain  = torch.sqrt(1/((torch.abs(x)**2).mean()+torch.finfo(torch.float).eps)) 
+    
+        return augmentation_gain * normalize_gain * x
         
     @staticmethod
     def peak_normalize(x):
+        """
+            Peak normalization, the maximum now becomes 1 or -1
+
+            Args:
+                x (Tensor): Data to normalize
+        """
         factor = 1/(torch.max(torch.abs(x))+torch.finfo(torch.float).eps)
         new_x = factor * x
 
@@ -496,7 +522,7 @@ if __name__ == '__main__':
     non_mixing = ["Human voice"]
     # non_mixing = ["Dog"]
     branch_class = "Human voice"
-    dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset/FSD50K",
+    dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset",
                             frame_size, 
                             hop_size, 
                             target_class,
@@ -504,7 +530,7 @@ if __name__ == '__main__':
                             branch_class=branch_class,
                             forceCPU=True, 
                             return_spectrogram=False,
-                            type="train",
+                            type="val",
                             supervised=True,
                             isolated=True)
     print(len(dataset))
@@ -514,6 +540,6 @@ if __name__ == '__main__':
     # print(label)
 
     dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=False)
-    for _ in range(100):
+    for _ in range(2):
         for mix, isolatedSources, labels in dataloader:
             pass

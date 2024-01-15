@@ -14,6 +14,23 @@ class DataEntry:
         self.position = position
 
 class CustomDataset(Dataset):
+    """
+        MCFSTD Dataset
+
+        Args:
+            dir (str): Directory for test dataset
+            frame_size (int): Frame size for fft/ifft
+            hop_size (int): Hop size for fft/ifft
+            target_class (list of str): Classes that are considered for the target
+            mic_array (str): respeaker, kinect or 16sounds
+            sample_rate (int): sampling rate for audio samples
+            max_sources (int): Maximum number of sources for mixing, should always be 2 or more
+            forceCPU (bool): load with cpu or gpu
+            supervised (bool): Whether to load the data for supervised or unsupervised training           
+            return_spectorgram (bool): Whether the dataloaders should return spectrogram or waveforms
+            nb_iteration (int): Number of iteration on the targets that should be done for 1 epoch
+            nb_of_seconds (int): Number of seconds the audio sample should be
+    """
     def __init__(self, 
                  dir,
                  frame_size, 
@@ -25,8 +42,8 @@ class CustomDataset(Dataset):
                  forceCPU=False,
                  supervised=True, 
                  return_spectrogram=True,
-                 nb_iteration=5, 
-                 nb_of_seconds=3) -> None:
+                 nb_iteration=1, 
+                 nb_of_seconds=5) -> None:
         super().__init__()
         self.dir = dir
         self.sample_rate = sample_rate
@@ -75,9 +92,18 @@ class CustomDataset(Dataset):
         )
 
     def __len__(self):
+        """
+            Number of items in dataset
+        """
         return len(self.paths_to_target_data)*self.nb_iteration
     
     def __getitem__(self, idx):
+        """
+            Getter for data in data set.
+
+            Args:
+                idx (int): From 0 to lenght of dataset obtain with len(self)
+        """
         idx = idx % len(self.paths_to_target_data)
         target_data: DataEntry = self.paths_to_target_data[idx] 
 
@@ -142,6 +168,13 @@ class CustomDataset(Dataset):
         return mix, isolated_sources, idxs_classes
     
     def get_serialized_sample(self, idx, key=1500):
+        """
+            Getter that doesn't have radomness for logging
+
+            Args:
+                idx (int): From 0 to lenght of dataset obtain with len(self)
+                key (int): Number for getting the additional sources without randomness
+        """
         idx = idx % len(self.paths_to_target_data)
         target_data: DataEntry = self.paths_to_target_data[idx] 
 
@@ -197,6 +230,17 @@ class CustomDataset(Dataset):
     
     @staticmethod
     def get_right_number_of_samples(x, sample_rate, seconds, shuffle=False):
+        """
+            If the waveform is too short pad it to make it the nubmer of seconds desired else if it's too long
+            cut it.
+
+            Args:
+                x (Tensor): Waveform with shape (..., time)
+                sample_rate (int): Sample rate of the waveform
+                seconds (int): Desired number of seconds
+                shuffle (bool): If cutting, select radomn a random segment else take the first segment. If padding pad 
+                                randomly each side else pad equally.
+        """
         nb_of_samples = seconds*sample_rate
         if x.shape[1] < nb_of_samples:
             missing_nb_of_samples = nb_of_samples-x.shape[1]
@@ -220,7 +264,13 @@ class CustomDataset(Dataset):
     
     @staticmethod
     def rms_normalize(x, augmentation=False):
-        # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = 0
+        """
+            Solves this equation: 10*torch.log10((torch.abs(x)**2).mean()) = 0
+
+            Args:
+                x (Tensor): Data to normalize
+                augmentation (bool): Whether to normalize to 0 dB or a gain between -5 and 5 dB.
+        """
 
         if augmentation:
             # Gain between -5 and 5 dB
@@ -235,6 +285,12 @@ class CustomDataset(Dataset):
         
     @staticmethod
     def peak_normalize(x):
+        """
+            Peak normalization, the maximum now becomes 1 or -1
+
+            Args:
+                x (Tensor): Data to normalize
+        """
         factor = 1/(torch.max(torch.abs(x))+torch.finfo(torch.float).eps)
         new_x = factor * x
 

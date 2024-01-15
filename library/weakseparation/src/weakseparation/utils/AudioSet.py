@@ -101,6 +101,25 @@ class OntNode():
 
 
 class AudioSetDataset(Dataset):
+    """
+        AudioSet Dataset.
+
+        Args:
+            dir (str): Directory for test dataset
+            frame_size (int): Frame size for fft/ifft
+            hop_size (int): Hop size for fft/ifft
+            target_class (list of str): Classes that are considered for the target
+            non_mixing_classes (list of str): Classes that should not be in noise
+            branch_class (str): Isolated target needs to come from this branch class, useful when target is less specific like speech
+            type (str): train, val or test
+            sample_rate (int): sampling rate for audio samples
+            max_sources (int): Maximum number of sources for mixing, should always be 2 or more
+            forceCPU (bool): load with cpu or gpu
+            supervised (bool): Whether to load the data for supervised or unsupervised training           
+            nb_iteration (int): Number of iteration on the targets that should be done for 1 epoch
+            nb_of_seconds (int): Number of seconds the audio sample should be
+            isolated (bool): Whether the audio samples should be isolated or not (useful for supervision)
+    """
     def __init__(self, 
                  dir,
                  frame_size, 
@@ -113,7 +132,6 @@ class AudioSetDataset(Dataset):
                  max_sources=3, 
                  forceCPU=False, 
                  return_spectrogram=True, 
-                 rir=False,
                  supervised=True,
                  nb_iteration=1,
                  nb_of_seconds=3,
@@ -125,7 +143,6 @@ class AudioSetDataset(Dataset):
         self.nb_of_seconds = nb_of_seconds
         self.non_mixing_classes = non_mixing_classes
         self.type = type
-        self.rir = rir
         self.return_spectrogram = return_spectrogram
         self.supervised = supervised
         self.nb_iteration = nb_iteration
@@ -206,13 +223,6 @@ class AudioSetDataset(Dataset):
                     label_list = [self.ontology_dict[label]["name"] for label in data["labels"].split(",")]
                     label_str = ",".join(label_list)
                     self.labels[wav_path] = label_str
-
-        if self.rir:
-            library_root = "/".join(__file__.split("/")[:-5])
-            self.path_to_rirs = os.path.join(library_root, "dataset", "dEchorate", "dEchorate_rir.h5")
-            self.rir_dataset = h5py.File(self.path_to_rirs, mode='r')
-            self.rooms = list(self.rir_dataset['rir'].keys())
-            self.sources = list(self.rir_dataset['rir'][self.rooms[0]].keys())
         
         self.stft = torchaudio.transforms.Spectrogram(
             n_fft=frame_size,
@@ -225,22 +235,21 @@ class AudioSetDataset(Dataset):
             n_fft=frame_size, hop_length=hop_size, window_fn=sqrt_hann_window
         )
 
-    def get_child_classes(self, list_of_children):
-        all_children = []
-        for child in list_of_children:
-            all_children.append(child)
-            if children_of_child := self.get_child_classes(self.ontology_dict[child]['child_ids']):
-                all_children.extend(children_of_child)
-
-        return all_children
-
     def __len__(self):
+        """
+            Number of items in dataset
+        """
         return len(self.paths_to_target_data)*self.nb_iteration
     
     def __getitem__(self, idx):
+        """
+            Getter for data in data set.
+
+            Args:
+                idx (int): From 0 to lenght of dataset obtain with len(self)
+        """
         idx = idx % len(self.paths_to_target_data)
-        # The 16k samples were generated using sox
-        # os.system('sox ' + basepath + audiofile+' -r 16000 ' + targetpath + audiofile + '> /dev/null 2>&1')
+
         if self.type != "test":
             wav_path = os.path.join(self.dir, self.paths_to_target_data[idx])
         else:
@@ -250,23 +259,6 @@ class AudioSetDataset(Dataset):
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
         x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=True)
-
-        if torch.sum(torch.isnan(x)):
-            print("Target Nan")
-            print(self.paths_to_target_data[idx])
-
-        # Label for clasification
-        if not self.supervised:
-            classification_label = torch.zeros(200, device=self.device, dtype=torch.float32)
-            # for label_str in self.labels[self.paths_to_target_data[idx]].split(','):
-            #     classification_label[int(self.index_dict[label_str])] = 1.0
-
-        if self.rir:
-            room = random.randint(0, len(self.rooms)-1)
-            array_idx = random.randint(0, 5) * 5 
-            source_list = []
-            rir = self.select_rir(source_list, room, array_idx)
-            x = self.apply_rir(rir, x[0])[None,0,:]
 
         mix = self.rms_normalize(x, True)
 
@@ -295,32 +287,20 @@ class AudioSetDataset(Dataset):
                 additionnal_x = torch.zeros_like(mix)
             else:
                 if self.type != "test":
-                    wav_path = os.path.join(self.dir, self.paths_to_data[idx])
+                    wav_path = os.path.join(self.dir, self.paths_to_data[index])
                 else:
-                    wav_path = os.path.join(self.dir, self.paths_to_data[idx])
+                    wav_path = os.path.join(self.dir, self.paths_to_data[index])
 
                 additionnal_x, file_sample_rate = torchaudio.load(wav_path)
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=True)
-
-                if self.rir:
-                    rir = self.select_rir(source_list, room, array_idx)
-                    additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
                               
                 additionnal_x = self.rms_normalize(additionnal_x, True)
-
-                if torch.sum(torch.isnan(additionnal_x)):
-                    print(self.paths_to_data[index] + ".wav")
-                    additionnal_x = torch.zeros_like(additionnal_x)
 
                 mix += additionnal_x
 
             isolated_sources = torch.cat((isolated_sources, additionnal_x[None, ...]))
-
-        if torch.sum(torch.isnan(isolated_sources)):
-            print(self.paths_to_data[index] + ".wav")
-            additionnal_x = torch.zeros_like(additionnal_x)
 
         mix, factor = self.peak_normalize(mix)
         isolated_sources *= factor
@@ -331,20 +311,20 @@ class AudioSetDataset(Dataset):
         mix *= volume
         isolated_sources *= volume
 
-        if torch.sum(torch.isnan(isolated_sources)):
-            print(self.paths_to_data[index] + ".wav")
-            additionnal_x = torch.zeros_like(additionnal_x)
-
         if self.return_spectrogram:
             mix = self.stft(mix)
             isolated_sources = self.stft(isolated_sources)
 
-        if not self.supervised and self.type != "test":
-            return mix, isolated_sources, idxs_classes, classification_label
-        else:
-            return mix, isolated_sources, idxs_classes
+        return mix, isolated_sources, idxs_classes
     
     def get_serialized_sample(self, idx, key=1500):
+        """
+            Getter that doesn't have radomness for logging
+
+            Args:
+                idx (int): From 0 to lenght of dataset obtain with len(self)
+                key (int): Number for getting the additional sources without randomness
+        """
         idx = idx % len(self.paths_to_target_data)
         wav_path = os.path.join(self.dir, self.paths_to_target_data[idx]) 
 
@@ -352,16 +332,6 @@ class AudioSetDataset(Dataset):
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
         x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=False)
-
-        if self.rir:
-            room = 0
-            array_idx = 0 
-
-            rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[0]][()][:,array_idx:array_idx+5]
-            rir = rir.transpose()
-            rir = torch.tensor(rir).to(torch.float32)
-            rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
-            x = self.apply_rir(rir, x[0])[None,0,:]
 
         mix = self.rms_normalize(x, False)
 
@@ -396,13 +366,6 @@ class AudioSetDataset(Dataset):
                 # TODO: number of seconds should be a parameter
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
 
-                if self.rir:
-                    rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[num_of_additionnal+1]][()][:,array_idx:array_idx+5]
-                    rir = rir.transpose()
-                    rir = torch.tensor(rir).to(torch.float32)
-                    rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
-                    additionnal_x = self.apply_rir(rir, additionnal_x[0])[None,0,:]
-
                 additionnal_x = self.rms_normalize(additionnal_x, False)
                 
                 mix += additionnal_x
@@ -425,6 +388,17 @@ class AudioSetDataset(Dataset):
     
     @staticmethod
     def get_right_number_of_samples(x, sample_rate, seconds, shuffle=False):
+        """
+            If the waveform is too short pad it to make it the nubmer of seconds desired else if it's too long
+            cut it.
+
+            Args:
+                x (Tensor): Waveform with shape (..., time)
+                sample_rate (int): Sample rate of the waveform
+                seconds (int): Desired number of seconds
+                shuffle (bool): If cutting, select radomn a random segment else take the first segment. If padding pad 
+                                randomly each side else pad equally.
+        """
         nb_of_samples = seconds*sample_rate
         if x.shape[1] < nb_of_samples:
             missing_nb_of_samples = nb_of_samples-x.shape[1]
@@ -449,6 +423,7 @@ class AudioSetDataset(Dataset):
     def apply_rir(rirs, source):
         """
         Method to apply multichannel RIRs to a mono-signal.
+        
         Args:
             rirs (tensor): Multi-channel RIR,   shape = (channels, frames)
             source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
@@ -463,24 +438,17 @@ class AudioSetDataset(Dataset):
             )
 
         return output
-    
-    def select_rir(self, source_list, room, array_idx):
-        while (rir_source := random.randint(0, len(self.sources)-1)) in source_list:
-            pass
-
-        source_list.append(rir_source)
-
-        rir = self.rir_dataset['rir'][self.rooms[room]][self.sources[rir_source]][()][:,array_idx:array_idx+5]
-        rir = rir.transpose()
-        rir = torch.tensor(rir).to(torch.float32)
-        rir = torchaudio.functional.resample(rir, orig_freq=48000, new_freq=self.sample_rate).to(self.device)
-    
-        return rir
 
     
     @staticmethod
     def rms_normalize(x, augmentation=False):
-        # Equation: 10*torch.log10((torch.abs(X)**2).mean()) = 0
+        """
+            Solves this equation: 10*torch.log10((torch.abs(x)**2).mean()) = 0
+
+            Args:
+                x (Tensor): Data to normalize
+                augmentation (bool): Whether to normalize to 0 dB or a gain between -5 and 5 dB.
+        """
 
         if augmentation:
             # Gain between -5 and 5 dB
