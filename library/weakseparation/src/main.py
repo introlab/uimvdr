@@ -32,6 +32,21 @@ def main(args):
 
         config_path = os.path.join(run_path, "files/config.yaml")
 
+    speech_set = {"Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"}
+
+    if "Bark" in args.target_class:
+        args.branch_class = "Domestic animals, pets"
+        args.non_mixing_classes = ["Dog"]
+    elif not set(args.target_class).isdisjoint(speech_set) or "Speech" in args.target_class:
+        args.target_class = ["Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"]
+        args.branch_class = "Human voice"
+        args.non_mixing_classes = ["Human voice"]
+    elif "Piano" in args.target_class:
+        args.branch_class = "Musical instrument"
+        args.non_mixing_classes = ["Keyboard (musical)"]
+    else:
+        print("Please make sure to define the branch class and non_mixing_classes argument as it is not a usual target class")
+
     if args.log:
         if args.ckpt_path is not None:
             logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=config_path)
@@ -57,6 +72,7 @@ def main(args):
     beta = logger.experiment.config["beta"]
     gamma = logger.experiment.config["gamma"]
     kappa = logger.experiment.config["kappa"]
+    audioset = logger.experiment.config["audioset"]
     
     # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
     # batch_size = 1
@@ -77,11 +93,17 @@ def main(args):
         save_last=True
     )
 
-    audioset_path = os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset")
+    if audioset:
+        dataset_class = weakseparation.AudioSetDataset
+        dataset_path = os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset")
+    else:
+        dataset_class = weakseparation.FSD50KDataset
+        dataset_path= args.dataset_path
+
     custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
     dm = weakseparation.DataModule(
-        weakseparation.FSD50KDataset,
-        args.dataset_path,
+        dataset_class,
+        dataset_path,
         weakseparation.customDataset.CustomDataset,
         custom_dataset_path,
         target_class=target_class,
@@ -140,6 +162,32 @@ def main(args):
             print("Starting Testing")
             trainer.test(model=model, datamodule=dm, ckpt_path="best")
             print("Ending Testing")
+
+    if args.example:
+        dm.setup("test")
+        paths = [
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/E/Speech/13.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/H/Piano/0.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/B/Mechanical_fan/6.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/G/Bark/2.wav",
+        ]
+        mix, isolated_sources, labels = dm.dataset_test_16sounds.get_personalized_sample(paths)
+        if not args.resume_training and os.path.exists(ckpt_path):
+            print(f"Logging example for {ckpt_path}")
+            model = weakseparation.ConvTasNet.load_from_checkpoint(
+                checkpoint_path=ckpt_path,
+            )
+            model.to('cuda' if torch.cuda.is_available() else 'cpu')
+            multimic_mix = torch.stack((mix, mix))
+            multimic_isolated_sources = torch.stack((isolated_sources, isolated_sources))
+            orig_labels = [labels, labels]
+            model.log_example(multimic_mix, multimic_isolated_sources, orig_labels, logger)
+        else:
+            print("Logging example")
+            multimic_mix = torch.stack((mix, mix)).to(model.device)
+            multimic_isolated_sources = torch.stack((isolated_sources, isolated_sources)).to(model.device)
+            orig_labels = [labels, labels]
+            model.log_example(multimic_mix, multimic_isolated_sources, orig_labels)
 
     if args.log:
         wandb.join()
@@ -281,8 +329,16 @@ if __name__ == "__main__":
         default="/home/jacob/dev/weakseparation/library/dataset",
         help="Logging path",
     )
-
-
+    parser.add_argument(
+        "--example",
+        help="If true, will log to an example to weight and biases",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--audioset",
+        help="If true, will use Audioset else, will use FSD50K",
+        action="store_true",
+    )
 
     args = parser.parse_args()
     main(args)

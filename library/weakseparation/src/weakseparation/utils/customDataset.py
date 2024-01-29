@@ -144,9 +144,6 @@ class CustomDataset(Dataset):
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
 
                 additionnal_x = self.rms_normalize(additionnal_x, True)
-                if torch.sum(torch.isnan(additionnal_x)):
-                    print(self.paths_to_data[index].path)
-                    additionnal_x = torch.zeros_like(additionnal_x)
                 
                 mix += additionnal_x
 
@@ -172,7 +169,7 @@ class CustomDataset(Dataset):
             Getter that doesn't have radomness for logging
 
             Args:
-                idx (int): From 0 to lenght of dataset obtain with len(self)
+                idx (int): From 0 to length of dataset obtain with len(self)
                 key (int): Number for getting the additional sources without randomness
         """
         idx = idx % len(self.paths_to_target_data)
@@ -228,6 +225,49 @@ class CustomDataset(Dataset):
 
         return mix, isolated_sources, idxs_classes
     
+    def get_personalized_sample(self, paths: list[str]):
+        """
+            Generate an example with the paths
+
+            Args:
+                paths (list[str]): Paths to use for the example. Need to have atleast one path in the first index. Pass None in the list to have zeros. 
+        """
+        idxs_classes = []
+        mix = None
+        isolated_sources = None
+
+        for path in paths:
+            if path is not None:
+                split_path = path.split("/")
+                data = DataEntry(path, split_path[-2], split_path[-3])
+                idxs_classes.append(data.class_name)
+                x, _ = torchaudio.load(data.path)
+                x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=False)
+                x = self.rms_normalize(x, False)
+            else:
+                x = torch.zeros_like(mix)
+                idxs_classes.append("Nothing")
+
+            
+            if mix is None:
+                mix = x
+            else:
+                mix += x
+
+            if isolated_sources is None:
+                isolated_sources = mix.clone()[None, ...]
+            else:
+                isolated_sources = torch.cat((isolated_sources, x[None, ...]))
+        
+        mix, factor = self.peak_normalize(mix)
+        isolated_sources *= factor
+
+        if self.return_spectrogram:
+            mix = self.stft(mix)
+            isolated_sources = self.stft(isolated_sources)
+
+        return mix, isolated_sources, idxs_classes
+    
     @staticmethod
     def get_right_number_of_samples(x, sample_rate, seconds, shuffle=False):
         """
@@ -263,7 +303,7 @@ class CustomDataset(Dataset):
 
     
     @staticmethod
-    def rms_normalize(x, augmentation=False):
+    def rms_normalize(x, augmentation=False, gain=None):
         """
             Solves this equation: 10*torch.log10((torch.abs(x)**2).mean()) = 0
 
@@ -273,10 +313,14 @@ class CustomDataset(Dataset):
         """
 
         if augmentation:
-            # Gain between -5 and 5 dB
-            aug = torch.rand(1).item()*10 - 5
-            augmentation_gain = 10 ** (aug/20)
+            if gain is None:
+                # Gain between -5 and 5 dB
+                aug = torch.rand(1).item()*10 - 5
+                augmentation_gain = 10 ** (aug/20)
+            else:
+                augmentation_gain = 10 ** (gain/20)
         else:
+            # 0 dB
             augmentation_gain = 1
         
         normalize_gain  = torch.sqrt(1/((torch.abs(x)**2).mean()+torch.finfo(torch.float).eps)) 
@@ -313,6 +357,14 @@ if __name__ == '__main__':
                             forceCPU=True, 
                             return_spectrogram=False)
     print(len(dataset))
+
+    paths = [
+        "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/A/Bark/4.wav",
+        "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/D/Speech/10.wav",
+        "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/G/Church_bell/15.wav",
+        None
+    ]
+    dataset.get_personalized_sample(paths)
 
     dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=False)
     for _ in range(5):

@@ -707,34 +707,6 @@ class ConvTasNet(pl.LightningModule):
 
             self.log_dict(results, batch_size=mix.shape[0], sync_dist=True)
 
-    def log_pred(self, pred, ground_truth, mix, labels):
-        """
-        Debug function for logging predictions
-        
-        Args:
-            pred (Tensor): (source, time,)
-            ground_truth (Tensor): (sources, time,)
-            mix (Tensor): (time,)
-            mix (Tensor like): (sources, time,)
-
-        """
-        i = 0
-        table = []
-
-        for waveform_source, waveform_groundTruth, label in zip(pred, ground_truth, labels):
-            table.append([
-                f"{label}",
-                scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
-                scale_invariant_signal_distortion_ratio(mix[None, ...], waveform_groundTruth[None, ...]).mean() ,
-                wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
-                wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
-                wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
-                wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
-            ])
-            i+=2
-
-        self.logger.log_table(key="results", columns=self.log_columns, data=table)
-
     def on_test_end(self):
         """
             Log examples on test end
@@ -743,145 +715,159 @@ class ConvTasNet(pl.LightningModule):
             mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_test_16sounds.get_serialized_sample(18, 1405)
             mix1, isolated_sources1, labels1 = self.trainer.datamodule.dataset_test_16sounds.get_serialized_sample(10, 1300)
 
-            multimic_mix = torch.stack((mix0, mix1)).to(self.device)
-            multimic_isolated_sources = torch.stack((isolated_sources0, isolated_sources1)).to(self.device)
+            multimic_mix = torch.stack((mix0, mix1))
+            multimic_isolated_sources = torch.stack((isolated_sources0, isolated_sources1))
             orig_labels = [labels0, labels1]
-            labels = np.array(orig_labels).T
 
-            # Ignore mics for now
-            mix = multimic_mix[:,0]
-            isolated_sources = multimic_isolated_sources[:,:,0]
+            self.log_example(multimic_mix, multimic_isolated_sources, orig_labels)
 
-            if not self.supervised:
-                MoM, isolated_sources, labels = self.prepare_data_for_unsupervised(isolated_sources, labels)
-            else:
-                isolated_sources, labels = self.prepare_data_for_supervised(isolated_sources, labels)
+    def log_example(self, multimic_mix, multimic_isolated_sources, orig_labels, logger=None):
+        """
+            Log examples
+        """
+        if logger is None:
+            logger = self.logger
 
-            isolated_pred, pred_mask = self(mix, return_pred_mask=True)
+        if isinstance(logger, WandbLogger):
+            with torch.no_grad():
+                multimic_mix = multimic_mix.to(self.device)
+                multimic_isolated_sources = multimic_isolated_sources.to(self.device)
+                labels = np.array(orig_labels).T
 
-            if multimic_mix.shape[1] > 1:
-                stft_mix = self.encoder.encoder(multimic_mix)
-                stft_target = self.encoder.encoder(multimic_isolated_sources[:,0])
-                oracle_mask = torch.abs(stft_target[:,0]) / (torch.abs(stft_target[:,0]) + torch.abs(stft_mix[:,0]-stft_target[:,0]) + self.epsilon)
-                stft_oracle_pred = (stft_mix.transpose(0,1) * oracle_mask).transpose(0,1)
-
-                oracle_pred = self.decoder.decoder(stft_oracle_pred[:,0])
-                oracle_pred = torch.nn.functional.pad(oracle_pred, (0, int(mix.shape[-1]-oracle_pred.shape[-1])), mode="constant", value=0)
-                # Get Spectrograms
-                stft_pred = (stft_mix.transpose(0,1) * pred_mask).transpose(0,1)
-                stft_noise = stft_mix - stft_pred
-                stft_oracle_noise = stft_mix - stft_oracle_pred
-
-                # Get Spatial covariance matrices
-                scm_pred = self.scm_transform(stft_pred)
-                scm_pred_noise = self.scm_transform(stft_noise)
-                scm_oracle = self.scm_transform(stft_oracle_pred)
-                scm_oracle_noise = self.scm_transform(stft_oracle_noise)
-
-                # Compute beamforming weight and apply it
-                beamformed_pred = self.mvdr_transform(stft_mix, scm_pred, scm_pred_noise, reference_channel=0)
-                beamformed_target = self.mvdr_transform(stft_target, scm_pred, scm_pred_noise, reference_channel=0)
-                beamformed_oracle = self.mvdr_transform(stft_mix, scm_oracle, scm_oracle_noise, reference_channel=0)
-                beamformed_oracle_target = self.mvdr_transform(stft_target, scm_oracle, scm_oracle_noise, reference_channel=0)
-
-                # Post mask
-                post_mask = pred_mask.clone()
-                post_mask[post_mask<0.3] = 0.3
-                beamformed_pred = beamformed_pred*pred_mask
-
-                # Spectrogram -> Waveform
-                beamformed_pred = self.decoder.decoder(beamformed_pred)
-                beamformed_pred = torch.nn.functional.pad(beamformed_pred, (0, int(mix.shape[-1]-beamformed_pred.shape[-1])), mode="constant", value=0)
-                beamformed_target = self.decoder.decoder(beamformed_target)
-                beamformed_target = torch.nn.functional.pad(beamformed_target, (0, int(mix.shape[-1]-beamformed_target.shape[-1])), mode="constant", value=0)
-                beamformed_oracle = self.decoder.decoder(beamformed_oracle)
-                beamformed_oracle = torch.nn.functional.pad(beamformed_oracle, (0, int(mix.shape[-1]-beamformed_oracle.shape[-1])), mode="constant", value=0)
-                beamformed_oracle_target = self.decoder.decoder(beamformed_oracle_target)
-                beamformed_oracle_target = torch.nn.functional.pad(beamformed_oracle_target, (0, int(mix.shape[-1]-beamformed_oracle_target.shape[-1])), mode="constant", value=0)
-
-                isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
-
-                label = labels[0]
-                isolated_pred_logging = isolated_pred[0]
-                isolated_sources = isolated_sources[0]
-                beam_pred = beamformed_pred[0]
-                oracle_pred = oracle_pred[0]
-                beam_oracle_pred = beamformed_oracle[0]
-                beam_oracle_target = beamformed_oracle_target[0]
-                beamformed_target = beamformed_target[0]
-
-                pred_energy = 10*torch.log10((isolated_pred_logging[0]**2).mean())
-                beam_pred = self.rms_normalize(beam_pred, pred_energy)
-
-                oracle_pred_energy = 10*torch.log10((oracle_pred**2).mean())
-                beam_oracle_pred = self.rms_normalize(beam_oracle_pred, oracle_pred_energy)
-
-                i = 0
-                table = []
-
-                table.append([
-                        f"{label[0]}",
-                        scale_invariant_signal_distortion_ratio(oracle_pred[None, ...], isolated_sources[0][None, ...]).mean() -
-                            scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
-                        wandb.Image(plot_spectrogram_from_waveform(oracle_pred[None, ...]+self.epsilon, 16000, title="Oracle prediction")),
-                        wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
-                        wandb.Audio(oracle_pred.cpu().numpy(), sample_rate=16000),
-                        wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
-                    ])
-                table.append([
-                        f"{label[0]}",
-                        scale_invariant_signal_distortion_ratio(beam_oracle_pred[None, ...], beam_oracle_target[None, ...]).mean() -
-                            scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
-                        wandb.Image(plot_spectrogram_from_waveform(beam_oracle_pred[None, ...]+self.epsilon, 16000, title="Beamformed Oracle prediction")),
-                        wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
-                        wandb.Audio(beam_oracle_pred.cpu().numpy(), sample_rate=16000),
-                        wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
-                    ])
-                table.append([
-                        f"{label[0]}",
-                        scale_invariant_signal_distortion_ratio(beam_pred[None, ...], beamformed_target[None, ...]).mean() -
-                            scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
-                        wandb.Image(plot_spectrogram_from_waveform(beam_pred[None, ...]+self.epsilon, 16000, title="Beamformed prediction")),
-                        wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
-                        wandb.Audio(beam_pred.cpu().numpy(), sample_rate=16000),
-                        wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
-                    ])
-                for waveform_source, waveform_groundTruth in zip(isolated_pred_logging, isolated_sources):
-                    table.append([
-                        f"{label[i]}",
-                        scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
-                            scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
-                        wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
-                        wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
-                        wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
-                        wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
-                    ])
-                    i+=1
-                self.logger.log_table(key="isolated results", columns=self.log_columns, data=table)
-
-                wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=16000)})
+                # Ignore mics for now
+                mix = multimic_mix[:,0]
+                isolated_sources = multimic_isolated_sources[:,:,0]
 
                 if not self.supervised:
-                    pred = self.efficient_mixit(isolated_pred, MoM)
-                    preds = pred[0]
-                    groundTruths = MoM[0]
-                    orig_label = orig_labels[0]
+                    MoM, isolated_sources, labels = self.prepare_data_for_unsupervised(isolated_sources, labels)
+                else:
+                    isolated_sources, labels = self.prepare_data_for_supervised(isolated_sources, labels)
+
+                isolated_pred, pred_mask = self(mix, return_pred_mask=True)
+
+                if multimic_mix.shape[1] > 1:
+                    stft_mix = self.encoder.encoder(multimic_mix)
+                    stft_target = self.encoder.encoder(multimic_isolated_sources[:,0])
+                    oracle_mask = torch.abs(stft_target[:,0]) / (torch.abs(stft_target[:,0]) + torch.abs(stft_mix[:,0]-stft_target[:,0]) + self.epsilon)
+                    stft_oracle_pred = (stft_mix.transpose(0,1) * oracle_mask).transpose(0,1)
+
+                    oracle_pred = self.decoder.decoder(stft_oracle_pred[:,0])
+                    oracle_pred = torch.nn.functional.pad(oracle_pred, (0, int(mix.shape[-1]-oracle_pred.shape[-1])), mode="constant", value=0)
+                    # Get Spectrograms
+                    stft_pred = (stft_mix.transpose(0,1) * pred_mask).transpose(0,1)
+                    stft_noise = stft_mix - stft_pred
+                    stft_oracle_noise = stft_mix - stft_oracle_pred
+
+                    # Get Spatial covariance matrices
+                    scm_pred = self.scm_transform(stft_pred)
+                    scm_pred_noise = self.scm_transform(stft_noise)
+                    scm_oracle = self.scm_transform(stft_oracle_pred)
+                    scm_oracle_noise = self.scm_transform(stft_oracle_noise)
+
+                    # Compute beamforming weight and apply it
+                    beamformed_pred = self.mvdr_transform(stft_mix, scm_pred, scm_pred_noise, reference_channel=0)
+                    beamformed_target = self.mvdr_transform(stft_target, scm_pred, scm_pred_noise, reference_channel=0)
+                    beamformed_oracle = self.mvdr_transform(stft_mix, scm_oracle, scm_oracle_noise, reference_channel=0)
+                    beamformed_oracle_target = self.mvdr_transform(stft_target, scm_oracle, scm_oracle_noise, reference_channel=0)
+
+                    # Post mask
+                    post_mask = pred_mask.clone()
+                    post_mask[post_mask<0.3] = 0.3
+                    beamformed_pred = beamformed_pred*pred_mask
+
+                    # Spectrogram -> Waveform
+                    beamformed_pred = self.decoder.decoder(beamformed_pred)
+                    beamformed_pred = torch.nn.functional.pad(beamformed_pred, (0, int(mix.shape[-1]-beamformed_pred.shape[-1])), mode="constant", value=0)
+                    beamformed_target = self.decoder.decoder(beamformed_target)
+                    beamformed_target = torch.nn.functional.pad(beamformed_target, (0, int(mix.shape[-1]-beamformed_target.shape[-1])), mode="constant", value=0)
+                    beamformed_oracle = self.decoder.decoder(beamformed_oracle)
+                    beamformed_oracle = torch.nn.functional.pad(beamformed_oracle, (0, int(mix.shape[-1]-beamformed_oracle.shape[-1])), mode="constant", value=0)
+                    beamformed_oracle_target = self.decoder.decoder(beamformed_oracle_target)
+                    beamformed_oracle_target = torch.nn.functional.pad(beamformed_oracle_target, (0, int(mix.shape[-1]-beamformed_oracle_target.shape[-1])), mode="constant", value=0)
+
+                    isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
+
+                    label = labels[0]
+                    isolated_pred_logging = isolated_pred[0]
+                    isolated_sources = isolated_sources[0]
+                    beam_pred = beamformed_pred[0]
+                    oracle_pred = oracle_pred[0]
+                    beam_oracle_pred = beamformed_oracle[0]
+                    beam_oracle_target = beamformed_oracle_target[0]
+                    beamformed_target = beamformed_target[0]
+
+                    pred_energy = 10*torch.log10((isolated_pred_logging[0]**2).mean())
+                    beam_pred = self.rms_normalize(beam_pred, pred_energy)
+
+                    oracle_pred_energy = 10*torch.log10((oracle_pred**2).mean())
+                    beam_oracle_pred = self.rms_normalize(beam_oracle_pred, oracle_pred_energy)
+
                     i = 0
                     table = []
 
-                    for waveform_source, waveform_groundTruth in zip(preds, groundTruths):
+                    table.append([
+                            f"{label[0]}",
+                            scale_invariant_signal_distortion_ratio(oracle_pred[None, ...], isolated_sources[0][None, ...]).mean() -
+                                scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
+                            wandb.Image(plot_spectrogram_from_waveform(oracle_pred[None, ...]+self.epsilon, 16000, title="Oracle prediction")),
+                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
+                            wandb.Audio(oracle_pred.cpu().numpy(), sample_rate=16000),
+                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                        ])
+                    table.append([
+                            f"{label[0]}",
+                            scale_invariant_signal_distortion_ratio(beam_oracle_pred[None, ...], beam_oracle_target[None, ...]).mean() -
+                                scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
+                            wandb.Image(plot_spectrogram_from_waveform(beam_oracle_pred[None, ...]+self.epsilon, 16000, title="Beamformed Oracle prediction")),
+                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
+                            wandb.Audio(beam_oracle_pred.cpu().numpy(), sample_rate=16000),
+                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                        ])
+                    table.append([
+                            f"{label[0]}",
+                            scale_invariant_signal_distortion_ratio(beam_pred[None, ...], beamformed_target[None, ...]).mean() -
+                                scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
+                            wandb.Image(plot_spectrogram_from_waveform(beam_pred[None, ...]+self.epsilon, 16000, title="Beamformed prediction")),
+                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
+                            wandb.Audio(beam_pred.cpu().numpy(), sample_rate=16000),
+                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                        ])
+                    for waveform_source, waveform_groundTruth in zip(isolated_pred_logging, isolated_sources):
                         table.append([
-                            f"{orig_label[i]}, {orig_label[i+1]}",
+                            f"{label[i]}",
                             scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
-                            scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
+                                scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
                             wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
                             wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
                             wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
                             wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
                         ])
-                        i+=2
+                        i+=1
+                    logger.log_table(key="isolated results", columns=self.log_columns, data=table)
 
-                    self.logger.log_table(key="results", columns=self.log_columns, data=table)
+                    wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=16000)})
+
+                    if not self.supervised:
+                        pred = self.efficient_mixit(isolated_pred, MoM)
+                        preds = pred[0]
+                        groundTruths = MoM[0]
+                        orig_label = orig_labels[0]
+                        i = 0
+                        table = []
+
+                        for waveform_source, waveform_groundTruth in zip(preds, groundTruths):
+                            table.append([
+                                f"{orig_label[i]}, {orig_label[i+1]}",
+                                scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
+                                scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
+                                wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
+                                wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
+                                wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
+                                wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                            ])
+                            i+=2
+
+                        logger.log_table(key="results", columns=self.log_columns, data=table)
 
         return
     
