@@ -5,6 +5,28 @@ import torch
 from torch.utils.data import DataLoader
 
 class DataModule(pl.LightningDataModule):
+    """
+        Class that dictates which dataset is used for every step (training, validation, test)
+
+        Args:
+            dataset (class): Class for train/val dataset
+            data_dir (str): Directory for train/val dataset
+            test_dataset (class): Class for test dataset
+            test_data_dir (str): Directory for test dataset
+            batch_size (int): Batch size for loading data
+            frame_size (int): Frame size for fft/ifft
+            hop_size (int): Hop size for fft/ifft
+            target_class (list of str): Classes that are considered for the target
+            non_mixing_classes (list of str): Classes that should not be included in the noise mixed with the targets
+            branch_class (str): Used for detecting if the sample is isolated
+            sample_rate (int): sampling rate for audio samples
+            max_sources (int): Maximum number of sources for mixing, should always be 2 or more
+            num_of_workers (int): Number of workers to load the data
+            nb_of_seconds (int): Number of seconds the audio sample should be
+            return_spectorgram (bool): Whether the dataloaders should return spectrogram or waveforms
+            supervised (bool): Whether to load the data for supervised or unsupervised training
+            isolated (bool): Whether the target should be isolated or not
+    """
     def __init__(self, 
                  dataset,
                  data_dir,
@@ -19,7 +41,7 @@ class DataModule(pl.LightningDataModule):
                  sample_rate=16000, 
                  max_sources=3, 
                  num_of_workers=4,
-                 nb_of_seconds=3,
+                 nb_of_seconds=5,
                  return_spectrogram=True,
                  supervised=True,
                  isolated=False):
@@ -43,6 +65,12 @@ class DataModule(pl.LightningDataModule):
         self.nb_of_seconds=nb_of_seconds
 
     def setup(self, stage: str):
+        """
+            This is called before each stage to setup datasets. See pytorch lightning for more info.
+
+            Args:
+                stage (str): fit, val or test
+        """
         nb_of_test_iteration = 10
         if stage == "fit":
             self.dataset_train = self.dataset(

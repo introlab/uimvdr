@@ -16,7 +16,11 @@ def main(args):
     ckpt_path=""
     if args.ckpt_path is not None:
         files = [os.path.join(dirpath,f) for (dirpath, dirnames, filenames) in os.walk(args.ckpt_path) for f in filenames]
-        ckpt_path = files[0]
+        if args.resume_training:
+            keyword = "last"
+        else:
+            keyword = "convtasnet"
+        ckpt_path = [s for s in files if keyword in s][0]
         run_id = ckpt_path.split("/")[-3]
         root = args.ckpt_path.split("/")[0:-2]
         root = "/".join(root)
@@ -27,6 +31,21 @@ def main(args):
                     run_path = os.path.join(dirpath,dir)
 
         config_path = os.path.join(run_path, "files/config.yaml")
+
+    speech_set = {"Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"}
+
+    if "Bark" in args.target_class:
+        args.branch_class = "Domestic animals, pets"
+        args.non_mixing_classes = ["Dog"]
+    elif not set(args.target_class).isdisjoint(speech_set) or "Speech" in args.target_class:
+        args.target_class = ["Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"]
+        args.branch_class = "Human voice"
+        args.non_mixing_classes = ["Human voice"]
+    elif "Piano" in args.target_class:
+        args.branch_class = "Musical instrument"
+        args.non_mixing_classes = ["Keyboard (musical)"]
+    else:
+        print("Please make sure to define the branch class and non_mixing_classes argument as it is not a usual target class")
 
     if args.log:
         if args.ckpt_path is not None:
@@ -39,54 +58,52 @@ def main(args):
         else:   
             logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, offline=True, config=args)
         
-    resume_training = logger.experiment.config["resume_training"]
+    resume_training = args.resume_training
     target_class = logger.experiment.config["target_class"]
     non_mixing_classes = logger.experiment.config["non_mixing_classes"]
     branch_class = logger.experiment.config["branch_class"]
     sample_rate = logger.experiment.config["sample_rate"]
     supervised = logger.experiment.config["supervised"]
     nb_of_seconds = logger.experiment.config["secs"]
-    epochs = logger.experiment.config["epochs"]
+    epochs = args.epochs
     learning_rate = logger.experiment.config["learning_rate"]
     batch_size = logger.experiment.config["batch_size"]
     num_of_workers = logger.experiment.config["num_of_workers"]
-    alpha = logger.experiment.config["alpha"]
     beta = logger.experiment.config["beta"]
     gamma = logger.experiment.config["gamma"]
     kappa = logger.experiment.config["kappa"]
-    classification_percentage = logger.experiment.config["classification_percentage"]
-
+    audioset = logger.experiment.config["audioset"]
+    
     # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
     # batch_size = 1
     isolated = True if supervised else False
     return_spectrogram = False
     seed = 17
     frame_size = 1024
-    bins = int(frame_size / 2) + 1
     hop_size = int(frame_size / 2)
     max_sources = 4
     num_speakers = 2 if supervised else 3 #pred by NN
 
     pl.seed_everything(seed, workers=True)
 
-    if not supervised:
-        checkpoint_callback = ModelCheckpoint(
-            monitor='val_MoMi',
-            mode = 'max',
-            filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_MoMi:.3f}'
-        )
-    else:
-        checkpoint_callback = ModelCheckpoint(
-            monitor='val_target_SI_SDRi',
-            mode = 'max',
-            filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}'
-        )
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_target_SI_SDRi',
+        mode = 'max',
+        filename='convtasnet-{epoch:02d}-{val_loss:.5f}-{val_target_SI_SDRi:.3f}',
+        save_last=True
+    )
 
-    fsd50k_path = os.path.join(args.dataset_path, "FSD50K")
+    if audioset:
+        dataset_class = weakseparation.AudioSetDataset
+        dataset_path = os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset")
+    else:
+        dataset_class = weakseparation.FSD50KDataset
+        dataset_path= args.dataset_path
+
     custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
     dm = weakseparation.DataModule(
-        weakseparation.FSD50K.FSD50KDataset,
-        fsd50k_path,
+        dataset_class,
+        dataset_path,
         weakseparation.customDataset.CustomDataset,
         custom_dataset_path,
         target_class=target_class,
@@ -106,15 +123,12 @@ def main(args):
 
     model = weakseparation.ConvTasNet(
         N=frame_size, 
-        H=bins, 
         activate="softmax", 
         num_spks=num_speakers, 
         supervised=supervised,
-        alpha=alpha,
         beta=beta,
         gamma=gamma,
         kappa=kappa,
-        classi_percent=classification_percentage,
         learning_rate=learning_rate
     )
     
@@ -122,16 +136,18 @@ def main(args):
         max_epochs=epochs,
         accelerator='gpu',
         devices=-1,
-        strategy = DDPStrategy(find_unused_parameters=False),
+        strategy = DDPStrategy(find_unused_parameters=True),
         callbacks=[checkpoint_callback],
         logger=logger,
-        deterministic=False if classification_percentage else True,
+        deterministic=True,
         log_every_n_steps=5,
         resume_from_checkpoint=ckpt_path if resume_training else None
     )
 
     if args.train:
-        trainer.fit(model=model, datamodule=dm)
+        trainer.fit(model=model, 
+                    datamodule=dm,
+                    ckpt_path=ckpt_path if resume_training else None)
 
     if args.predict:
         if not args.resume_training and os.path.exists(ckpt_path):
@@ -146,6 +162,32 @@ def main(args):
             print("Starting Testing")
             trainer.test(model=model, datamodule=dm, ckpt_path="best")
             print("Ending Testing")
+
+    if args.example:
+        dm.setup("test")
+        paths = [
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/E/Speech/13.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/H/Piano/0.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/B/Mechanical_fan/6.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/G/Bark/2.wav",
+        ]
+        mix, isolated_sources, labels = dm.dataset_test_16sounds.get_personalized_sample(paths)
+        if not args.resume_training and os.path.exists(ckpt_path):
+            print(f"Logging example for {ckpt_path}")
+            model = weakseparation.ConvTasNet.load_from_checkpoint(
+                checkpoint_path=ckpt_path,
+            )
+            model.to('cuda' if torch.cuda.is_available() else 'cpu')
+            multimic_mix = torch.stack((mix, mix))
+            multimic_isolated_sources = torch.stack((isolated_sources, isolated_sources))
+            orig_labels = [labels, labels]
+            model.log_example(multimic_mix, multimic_isolated_sources, orig_labels, logger)
+        else:
+            print("Logging example")
+            multimic_mix = torch.stack((mix, mix)).to(model.device)
+            multimic_isolated_sources = torch.stack((isolated_sources, isolated_sources)).to(model.device)
+            orig_labels = [labels, labels]
+            model.log_example(multimic_mix, multimic_isolated_sources, orig_labels)
 
     if args.log:
         wandb.join()
@@ -287,8 +329,16 @@ if __name__ == "__main__":
         default="/home/jacob/dev/weakseparation/library/dataset",
         help="Logging path",
     )
-
-
+    parser.add_argument(
+        "--example",
+        help="If true, will log to an example to weight and biases",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--audioset",
+        help="If true, will use Audioset else, will use FSD50K",
+        action="store_true",
+    )
 
     args = parser.parse_args()
     main(args)

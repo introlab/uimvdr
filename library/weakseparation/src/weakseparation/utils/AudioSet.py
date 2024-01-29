@@ -4,8 +4,7 @@ import csv
 import torchaudio
 import torch
 import random
-import pandas
-import numpy as np
+import h5py
 
 from .Windows import sqrt_hann_window
 # from Windows import sqrt_hann_window
@@ -101,9 +100,9 @@ class OntNode():
         return root
 
 
-class FSD50KDataset(Dataset):
+class AudioSetDataset(Dataset):
     """
-        FSD50K Dataset. When the target is speech, the data comes from Librispeech
+        AudioSet Dataset.
 
         Args:
             dir (str): Directory for test dataset
@@ -152,11 +151,11 @@ class FSD50KDataset(Dataset):
         else:
             self.isolated = isolated
         self.ontology_dict = {}
-        ontology = json.load(open(os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "ontology.json")))
+        ontology = json.load(open(os.path.join(dir, "ontology", "ontology.json")))
         for item in ontology:
             self.ontology_dict[item["id"]] = item
         name_to_id = {v['name']: k for k, v in self.ontology_dict.items()}
-        self.index_dict = make_index_dict(os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "class_labels_indices.csv"))
+        self.index_dict = make_index_dict(os.path.join(dir, "ontology", "class_labels_indices.csv"))
         tree = get_tree(self.index_dict, ontology)
 
         if forceCPU:
@@ -167,96 +166,63 @@ class FSD50KDataset(Dataset):
             else:
                 self.device = 'cpu'
 
-        # Only use data with one leaf class?
         self.paths_to_data = []
         self.paths_to_target_data = []
         self.labels = {}
-        speech_set = {"Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"}
-        self.speech = True if not set(target_class).isdisjoint(speech_set) else False
-        if self.type != "test":
-            csv_path = os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "dev.csv")
-            if self.speech:
-                if self.type == "train":
-                    rir_folds = rir_folds = list(range(1,81))
-                elif self.type == "test":
-                    rir_folds = rir_folds = list(range(81,96))
-                elif self.type == "val":
-                    rir_folds = rir_folds = list(range(96,101))  
+        if self.type == "train":
+            csv_path = os.path.join(dir, "pointer_files", "whole_train_data.json")
+        elif self.type == "val":
+            csv_path = os.path.join(dir, "pointer_files", "eval_data.json")
         else:
-            if self.speech:
-                rir_folds = rir_folds = list(range(96,101))
-            csv_path = os.path.join(dir, "FSD50K", "FSD50K.ground_truth", "eval.csv")
+            raise RuntimeError(f"Dataset does not support type {self.type}")
 
         target_id = set([name_to_id[cls] for cls in target_class])
         non_mixing_set = set([name_to_id[cls] for cls in self.non_mixing_classes])
 
-        with open(csv_path, mode='r') as csv_file:
-            csvreader = csv.reader(csv_file)
-            for idx, row in enumerate(csvreader):
-                if (self.type == "test" or row[3] == self.type) and idx != 0:
-                    ids = set(row[2].split(","))
-                    if self.type != "test":
-                        wav_path = os.path.join(self.dir, "FSD50K", "FSD50K.dev_audio", row[0] + ".wav")
-                    else:
-                        wav_path = os.path.join(self.dir, "FSD50K", "FSD50K.eval_audio", row[0] + ".wav")
-                    if isolated:
-                        multiple_leaf_class = False
-                        one_leaf_class = False
-                        one_branch = True
-                        
-                        for identifier in ids:
-                            node = tree[1][name_to_id[branch_class]]
-                            if not (node in tree[1][identifier].parents() or node in tree[1][identifier].children() or node == tree[1][identifier]):
-                                one_branch = False
+        with open(csv_path, mode='r') as json_file:
+            data_dict = json.load(json_file)
+            for data in data_dict["data"]:
+                ids = set(data["labels"].split(","))
+                if isolated:
+                    multiple_leaf_class = False
+                    one_leaf_class = False
+                    one_branch = True
+                    
+                    for identifier in ids:
+                        node = tree[1][name_to_id[branch_class]]
+                        if not (node in tree[1][identifier].parents() or node in tree[1][identifier].children() or node == tree[1][identifier]):
+                            one_branch = False
 
-                            if self.ontology_dict[identifier] and not self.ontology_dict[identifier]['child_ids']:
-                                if one_leaf_class:
-                                    multiple_leaf_class = True
+                        if self.ontology_dict[identifier] and not self.ontology_dict[identifier]['child_ids']:
+                            if one_leaf_class:
+                                multiple_leaf_class = True
 
-                                if not one_leaf_class:
-                                    one_leaf_class = True
+                            if not one_leaf_class:
+                                one_leaf_class = True
 
-                        #TODO: Simplify this
-                        if one_leaf_class and not multiple_leaf_class:
-                            if not target_id.isdisjoint(ids) and one_branch:
-                                self.paths_to_target_data.append(wav_path) 
-                            else:
-                                if non_mixing_set.isdisjoint(ids):
-                                    self.paths_to_data.append(wav_path)
-                            self.labels[wav_path] = row[1]
-                    else:
-                        if not target_id.isdisjoint(ids):
+                    # if not isolated or (one_leaf_class and not multiple_leaf_class) or \
+                    # (not one_leaf_class and not multiple_leaf_class):
+                    if not isolated or (one_leaf_class and not multiple_leaf_class):
+                        wav_path = "/".join((data["wav"].split("/")[4:]))
+                        if not target_id.isdisjoint(ids) and one_branch:
                             self.paths_to_target_data.append(wav_path) 
                         else:
                             if non_mixing_set.isdisjoint(ids):
                                 self.paths_to_data.append(wav_path)
-                        self.labels[wav_path] = row[1]
 
-        if self.speech:
-            self.paths_to_target_data = []
-            if self.type == "train":
-                root = os.path.join(self.dir, "Librispeech", "train")
-            elif self.type == "val":
-                root = os.path.join(self.dir, "Librispeech", "val")
-            elif self.type == "test":
-                root = os.path.join(self.dir, "Librispeech", "test")
-            for path, subdirs, files in os.walk(root):
-                for name in files:
-                    if name[-5:] == ".flac":
-                        filename = os.path.join(path, name)
-                        self.paths_to_target_data.append(filename)
-                        self.labels[filename] = "Librispeech"
-
-        if self.speech:
-            self.path_to_rirs = os.path.join(dir, "Bird")
-            self._rirs = None
-            for fold in rir_folds:
-                rir_directory = os.path.join(self.path_to_rirs, 'fold%03u' % fold)
-                csv_file = os.path.join(rir_directory, 'fold%03u.csv' % fold)
-                df = pandas.read_csv(csv_file)
-                df.insert(0, 'fold', fold)
-                self._rirs = pandas.concat([self._rirs, df])
-
+                        label_list = [self.ontology_dict[label]["name"] for label in data["labels"].split(",")]
+                        label_str = ",".join(label_list)
+                        self.labels[wav_path] = label_str
+                else:
+                    wav_path = "/".join((data["wav"].split("/")[4:]))
+                    if not target_id.isdisjoint(ids):
+                        self.paths_to_target_data.append(wav_path) 
+                    else:
+                        if non_mixing_set.isdisjoint(ids):
+                            self.paths_to_data.append(wav_path)
+                    label_list = [self.ontology_dict[label]["name"] for label in data["labels"].split(",")]
+                    label_str = ",".join(label_list)
+                    self.labels[wav_path] = label_str
         
         self.stft = torchaudio.transforms.Spectrogram(
             n_fft=frame_size,
@@ -283,22 +249,16 @@ class FSD50KDataset(Dataset):
                 idx (int): From 0 to lenght of dataset obtain with len(self)
         """
         idx = idx % len(self.paths_to_target_data)
-        x, file_sample_rate = torchaudio.load(self.paths_to_target_data[idx])
+
+        if self.type != "test":
+            wav_path = os.path.join(self.dir, self.paths_to_target_data[idx])
+        else:
+            wav_path = os.path.join(self.dir, self.paths_to_target_data[idx])
+
+        x, file_sample_rate = torchaudio.load(wav_path)
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
         x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=True)
-
-        if self.labels[self.paths_to_target_data[idx]] == "Librispeech":
-            mic_idx = random.randint(0, 7)
-            rir_idx = idx % len(self._rirs)
-            item = self._rirs.iloc[rir_idx]
-            key = item['id']
-            fold = item['fold']
-
-            rir_path = os.path.join(self.path_to_rirs, 'fold%03u' % fold, key[0], key[1], key + ".flac")
-            rir, _ = torchaudio.load(rir_path)
-
-            x = self.apply_rir(rir[mic_idx], x[0])[None,:]
 
         mix = self.rms_normalize(x, True)
 
@@ -308,8 +268,8 @@ class FSD50KDataset(Dataset):
         idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
         for source_nb in range(self.max_sources-1):
             # Make sure that there is not nothing in the second mix
-            if random.random() >= -1 or \
-               ((not self.supervised or self.type=="test" or self.type=="val") and source_nb == int(self.max_sources //2)):
+            if random.random() >= 0.5 or \
+               ((not self.supervised or self.type=="test" or self.type=="val") and source_nb == int(self.max_sources // 2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
                     additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
@@ -326,7 +286,12 @@ class FSD50KDataset(Dataset):
             if index == -1:
                 additionnal_x = torch.zeros_like(mix)
             else:
-                additionnal_x, file_sample_rate = torchaudio.load(self.paths_to_data[index])
+                if self.type != "test":
+                    wav_path = os.path.join(self.dir, self.paths_to_data[index])
+                else:
+                    wav_path = os.path.join(self.dir, self.paths_to_data[index])
+
+                additionnal_x, file_sample_rate = torchaudio.load(wav_path)
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=True)
@@ -361,22 +326,12 @@ class FSD50KDataset(Dataset):
                 key (int): Number for getting the additional sources without randomness
         """
         idx = idx % len(self.paths_to_target_data)
-        x, file_sample_rate = torchaudio.load(self.paths_to_target_data[idx])
+        wav_path = os.path.join(self.dir, self.paths_to_target_data[idx]) 
+
+        x, file_sample_rate = torchaudio.load(wav_path)
         x = torchaudio.functional.resample(x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
         # TODO: number of seconds should be a parameter
         x = self.get_right_number_of_samples(x, self.sample_rate, self.nb_of_seconds, shuffle=False)
-
-        if self.labels[self.paths_to_target_data[idx]] == "Librispeech":
-            mic_idx = random.randint(0, 7)
-            rir_idx = idx % len(self._rirs)
-            item = self._rirs.iloc[rir_idx]
-            rir_key = item['id']
-            fold = item['fold']
-
-            rir_path = os.path.join(self.path_to_rirs, 'fold%03u' % fold, rir_key[0], rir_key[1], rir_key + ".flac")
-            rir, _ = torchaudio.load(rir_path)
-
-            x = self.apply_rir(rir[mic_idx], x[0])[None,:]
 
         mix = self.rms_normalize(x, False)
 
@@ -405,7 +360,8 @@ class FSD50KDataset(Dataset):
             if index == -1:
                 additionnal_x = torch.zeros_like(additional_mix)
             else:
-                additionnal_x, file_sample_rate = torchaudio.load(self.paths_to_data[index])
+                wav_path = os.path.join(self.dir, self.paths_to_data[index]) 
+                additionnal_x, file_sample_rate = torchaudio.load(wav_path)
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 # TODO: number of seconds should be a parameter
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
@@ -464,18 +420,25 @@ class FSD50KDataset(Dataset):
         return x
     
     @staticmethod
-    def apply_rir(rir, source):
+    def apply_rir(rirs, source):
         """
         Method to apply multichannel RIRs to a mono-signal.
-
+        
         Args:
             rirs (tensor): Multi-channel RIR,   shape = (channels, frames)
             source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
         """
+        channels = rirs.shape[0]
         frames = len(source)
-        output = np.convolve(source.cpu().numpy(), rir.cpu().numpy())[:frames]
+        output = torch.empty((channels, frames))
 
-        return torch.tensor(output)
+        for channel_index in range(channels):
+            output[channel_index] = torch.tensor(
+                signal.convolve(source.cpu().numpy(), rirs[channel_index].cpu().numpy())[:frames]
+            )
+
+        return output
+
     
     @staticmethod
     def rms_normalize(x, augmentation=False):
@@ -495,17 +458,11 @@ class FSD50KDataset(Dataset):
             augmentation_gain = 1
         
         normalize_gain  = torch.sqrt(1/((torch.abs(x)**2).mean()+torch.finfo(torch.float).eps)) 
-    
+       
         return augmentation_gain * normalize_gain * x
-        
+    
     @staticmethod
     def peak_normalize(x):
-        """
-            Peak normalization, the maximum now becomes 1 or -1
-
-            Args:
-                x (Tensor): Data to normalize
-        """
         factor = 1/(torch.max(torch.abs(x))+torch.finfo(torch.float).eps)
         new_x = factor * x
 
@@ -521,8 +478,9 @@ if __name__ == '__main__':
     # target_class = ["Bark"]
     non_mixing = ["Human voice"]
     # non_mixing = ["Dog"]
+    # branch_class = "Domestic animals, pets"
     branch_class = "Human voice"
-    dataset = FSD50KDataset("/home/jacob/dev/weakseparation/library/dataset",
+    dataset = AudioSetDataset("/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset",
                             frame_size, 
                             hop_size, 
                             target_class,
@@ -530,7 +488,7 @@ if __name__ == '__main__':
                             branch_class=branch_class,
                             forceCPU=True, 
                             return_spectrogram=False,
-                            type="val",
+                            type="train",
                             supervised=True,
                             isolated=True)
     print(len(dataset))
@@ -540,6 +498,6 @@ if __name__ == '__main__':
     # print(label)
 
     dataloader = DataLoader(dataset, batch_size=32, num_workers=8, shuffle=False)
-    for _ in range(2):
+    for _ in range(100):
         for mix, isolatedSources, labels in dataloader:
             pass
