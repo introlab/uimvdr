@@ -72,7 +72,10 @@ def main(args):
     beta = logger.experiment.config["beta"]
     gamma = logger.experiment.config["gamma"]
     kappa = logger.experiment.config["kappa"]
-    audioset = logger.experiment.config["audioset"]
+    try:
+        audioset = logger.experiment.config["audioset"]
+    except:
+        audioset = False
     
     # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
     # batch_size = 1
@@ -166,10 +169,10 @@ def main(args):
     if args.example:
         dm.setup("test")
         paths = [
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/E/Speech/13.wav",
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/H/Piano/0.wav",
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/B/Mechanical_fan/6.wav",
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/G/Bark/2.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/E/Speech/24.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/G/Bark/5.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/H/Church_bell/10.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/B/Thunder/7.wav",
         ]
         mix, isolated_sources, labels = dm.dataset_test_16sounds.get_personalized_sample(paths)
         if not args.resume_training and os.path.exists(ckpt_path):
