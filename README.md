@@ -2,7 +2,9 @@
 
 This is the repository for UIMVDR.
 
-Put abstract here
+## Abstract
+
+Recently, neural networks have gained popularity for sound enhancement and separation. Despite their great performances, these results usually rely on large labelled datasets. Data available online mostly consists of single-channel, non-isolated recordings, making them unsuitable for supervised training and processing multi-channel audio. Multi-channel approaches have outperform single channel approaches as they can exploit both spatial and spectral features. Unsupervised Improved Minimum Variation Distortionless Response (UIMVDR) enables multi-channel sound enhancement and separation to leverage in-the-wild single-channel data through unsupervised training and beamforming. Results suggests that, UIMVDR is more robust to new domains and improves separation performances compared to supervised networks, particularly in scenarios where supervised data is limited. By using data available online, it also reduces the effort required in gathering data for multi-channel approaches.
 
 ## Get the code
 
@@ -31,6 +33,8 @@ Send us your comments/suggestions to improve the project in ["Issues"](https://g
 ## Acknowledgments
 
 Thanks to Jusper Lee for his pytorch implementation of the ConvTasNet: https://github.com/JusperLee/Conv-TasNet
+
+The work done here was supported by the Natural Sciences and Engineering Research Council of Canada (NSERC) and by the Fonds de Recherche du Québec en Nature et Technologies (FRQNT).
 
 ![IntRoLab](docs/IntRoLab.png)
 
