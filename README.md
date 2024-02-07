@@ -10,9 +10,9 @@ Recently, neural networks have gained popularity for sound enhancement and separ
 
 ```bash
 # Clone with git in a terminal
-git clone https://github.com/introlab/weakseparation.git
+git clone https://github.com/introlab/uimvdr.git
 # Go in the root folder
-cd weakseparation
+cd uimvdr
 # Install the dependencies
 pip install -r requirements.txt
 ```
