@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 ## Pretrained models
 
-Get pretrained models on [Google Drive](https://drive.google.com/drive/folders/1ERosQmD0yiLmH5JYttGRuyTanNQvH3XI?usp=drive_link)
+Get pretrained models on [Google Drive](https://drive.google.com/drive/folders/1ERosQmD0yiLmH5JYttGRuyTanNQvH3XI?usp=sharing)
 
 ## Improvements
 
