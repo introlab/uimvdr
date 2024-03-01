@@ -6,7 +6,7 @@
     "configurations": [
         {
             "name": "Python: Current File",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
@@ -14,20 +14,20 @@
         },
         {
             "name": "Main",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--train", "--epochs", "10", "--target_class", "Speech"],
+            "args": ["--log", "--train", "--epochs", "10", "--secs", "3"],
             "justMyCode": false
         },
         {
             "name": "Test",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--example", "--predict","--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/9p3slnez"],
+            "args": ["--example", "--log", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/oxf5w43t"],
             "justMyCode": false
         }
     ]

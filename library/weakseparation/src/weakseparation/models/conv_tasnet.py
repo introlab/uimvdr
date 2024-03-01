@@ -597,14 +597,6 @@ class ConvTasNet(pl.LightningModule):
         oracle_si_sdr = scale_invariant_signal_distortion_ratio(oracle_pred, isolated_sources[:,0]).mean()
         oracle_si_sdri = oracle_si_sdr - mix_si_sdr
 
-        speech = self.trainer.datamodule.dataset_test_16sounds.target_class == "Speech"
-        if speech:
-            try:
-                pesq = perceptual_evaluation_speech_quality(isolated_pred[:,0], isolated_sources[:,0], 16000, 'wb').mean()
-            except:
-                pesq = None
-            stoi = short_time_objective_intelligibility(isolated_pred[:,0], isolated_sources[:,0], 16000, ).mean()
-
         if multimic_mix.shape[1] > 1:
             # Get Spectrograms
             stft_pred = (stft_mix.transpose(0,1) * pred_mask).transpose(0,1)
@@ -645,17 +637,9 @@ class ConvTasNet(pl.LightningModule):
             beam_oracle_si_sdr = scale_invariant_signal_distortion_ratio(beamformed_oracle, beamformed_oracle_target).mean()
             beam_oracle_si_sdri = beam_oracle_si_sdr - mix_si_sdr
 
-            if speech:
-                try:
-                    beam_pesq = perceptual_evaluation_speech_quality(beamformed_pred, beamformed_target, 16000, 'wb').mean()
-                except:
-                    beam_pesq = None
-                beam_stoi = short_time_objective_intelligibility(beamformed_pred, beamformed_target, 16000).mean()
         else:
             beam_target_si_sdri = 0.0
             beam_oracle_si_sdri = 0.0
-            beam_pesq = 0.0
-            beam_stoi = 0.0
 
         if not self.supervised:
             isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
@@ -675,15 +659,6 @@ class ConvTasNet(pl.LightningModule):
                 "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,            
             }
 
-            if speech:
-                if pesq is not None and beam_pesq is not None:
-                    results.update({
-                        "test_pesq" : pesq,
-                        "test_stoi" : stoi,
-                        "test_beam_pesq" : beam_pesq,
-                        "test_beam_stoi" : beam_stoi,
-                    })
-
             self.log_dict(results, batch_size=mix.shape[0], sync_dist=True)
         else:
             msi = self.compute_msi(isolated_pred, isolated_sources, mix, labels)
@@ -695,15 +670,6 @@ class ConvTasNet(pl.LightningModule):
                 "test_beam_oracle_si_sdri" : beam_oracle_si_sdri,
                 "test_msi" : msi,
             }
-
-            if speech:
-                if pesq is not None and beam_pesq is not None:
-                    results.update({
-                        "test_pesq" : pesq,
-                        "test_stoi" : stoi,
-                        "test_beam_pesq" : beam_pesq,
-                        "test_beam_stoi" : beam_stoi,
-                    })
 
             self.log_dict(results, batch_size=mix.shape[0], sync_dist=True)
 
@@ -745,11 +711,18 @@ class ConvTasNet(pl.LightningModule):
 
                 isolated_pred, pred_mask = self(mix, return_pred_mask=True)
 
-                if multimic_mix.shape[1] > 1:
+                if multimic_mix.shape[1] > 0:
                     stft_mix = self.encoder.encoder(multimic_mix)
                     stft_target = self.encoder.encoder(multimic_isolated_sources[:,0])
                     oracle_mask = torch.abs(stft_target[:,0]) / (torch.abs(stft_target[:,0]) + torch.abs(stft_mix[:,0]-stft_target[:,0]) + self.epsilon)
                     stft_oracle_pred = (stft_mix.transpose(0,1) * oracle_mask).transpose(0,1)
+
+                    #New isolated/maks
+                    # pred_mask = 1-pred_mask
+                    isolated_pred[..., 0, :] = self.decoder.decoder(stft_mix[:, 0] * pred_mask, mix.shape[-1])
+
+                    # multi_iso = self.decoder.decoder(stft_mix[0] * pred_mask[0], mix.shape[-1])
+                    # torchaudio.save("/home/jacob/Documents/Drone_examples_separated/tau_average.wav", multi_iso.cpu(), 16000)
 
                     oracle_pred = self.decoder.decoder(stft_oracle_pred[:,0])
                     oracle_pred = torch.nn.functional.pad(oracle_pred, (0, int(mix.shape[-1]-oracle_pred.shape[-1])), mode="constant", value=0)
@@ -785,7 +758,8 @@ class ConvTasNet(pl.LightningModule):
                     beamformed_oracle_target = self.decoder.decoder(beamformed_oracle_target)
                     beamformed_oracle_target = torch.nn.functional.pad(beamformed_oracle_target, (0, int(mix.shape[-1]-beamformed_oracle_target.shape[-1])), mode="constant", value=0)
 
-                    isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
+                    # Do not have the clean sources so cannot recombine
+                    # isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
 
                     label = labels[0]
                     isolated_pred_logging = isolated_pred[0]
@@ -878,8 +852,8 @@ class ConvTasNet(pl.LightningModule):
         outputs.clear()
 
         if not self.current_epoch % 100 and isinstance(self.logger, WandbLogger):
-            mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(15, 1300)
-            mix1, isolated_sources1, labels1 = self.trainer.datamodule.dataset_val.get_serialized_sample(10, 1300)
+            mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(75, 350)
+            mix1, isolated_sources1, labels1 = self.trainer.datamodule.dataset_val.get_serialized_sample(10, 200)
 
             mix = torch.stack((mix0, mix1)).to(self.device)
             isolated_sources = torch.stack((isolated_sources0, isolated_sources1)).to(self.device)

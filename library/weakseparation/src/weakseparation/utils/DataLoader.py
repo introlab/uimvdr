@@ -1,7 +1,4 @@
 import pytorch_lightning as pl
-from pytorch_lightning.utilities.types import EVAL_DATALOADERS
-import torch
-
 from torch.utils.data import DataLoader
 
 class DataModule(pl.LightningDataModule):
@@ -30,25 +27,19 @@ class DataModule(pl.LightningDataModule):
     def __init__(self, 
                  dataset,
                  data_dir,
-                 test_dataset,
-                 test_data_dir,
+                 audioset_dir,
                  batch_size, 
                  frame_size, 
                  hop_size, 
-                 target_class=None,
-                 non_mixing_classes=None,
-                 branch_class=None,
                  sample_rate=16000, 
                  max_sources=3, 
                  num_of_workers=4,
                  nb_of_seconds=5,
                  return_spectrogram=True,
-                 supervised=True,
-                 isolated=False):
+                 supervised=True):
         super().__init__()
         self.dataset = dataset
-        self.test_dataset = test_dataset
-        self.test_data_dir = test_data_dir
+        self.audioset_dir = audioset_dir
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_of_workers = num_of_workers
@@ -57,11 +48,7 @@ class DataModule(pl.LightningDataModule):
         self.hop_size = hop_size
         self.max_sources = max_sources
         self.return_spectrogram = return_spectrogram
-        self.target_class = target_class
-        self.non_mixing_classes = non_mixing_classes
-        self.branch_class = branch_class
         self.supervised = supervised
-        self.isolated = isolated
         self.nb_of_seconds=nb_of_seconds
 
     def setup(self, stage: str):
@@ -71,118 +58,46 @@ class DataModule(pl.LightningDataModule):
             Args:
                 stage (str): fit, val or test
         """
-        nb_of_test_iteration = 10
         if stage == "fit":
             self.dataset_train = self.dataset(
                 self.data_dir,
+                self.audioset_dir,
                 self.frame_size,
                 self.hop_size,
                 type="train",
-                target_class=self.target_class,
-                non_mixing_classes=self.non_mixing_classes,
-                branch_class=self.branch_class,
                 sample_rate=self.sample_rate,
                 max_sources=self.max_sources,
                 nb_of_seconds=self.nb_of_seconds, 
                 forceCPU=True,
                 return_spectrogram=self.return_spectrogram,
                 supervised=self.supervised,
-                isolated=self.isolated,
             )
             self.dataset_val = self.dataset(
-                self.data_dir, 
+                self.data_dir,
+                self.audioset_dir, 
                 self.frame_size, 
                 self.hop_size, 
                 type="val",
-                target_class=self.target_class,
-                non_mixing_classes=self.non_mixing_classes,
-                branch_class=self.branch_class,
-                sample_rate=self.sample_rate,
                 max_sources=self.max_sources,
                 nb_of_seconds=self.nb_of_seconds,
                 nb_iteration = 3,
                 forceCPU=True,
                 return_spectrogram=self.return_spectrogram,
                 supervised=self.supervised,
-                isolated=self.isolated,
             )
         if stage == "val":
             self.dataset_val = self.dataset(
-                self.data_dir, 
+                self.data_dir,
+                self.audioset_dir, 
                 self.frame_size, 
                 self.hop_size, 
                 type="val",
-                target_class=self.target_class,
-                non_mixing_classes=self.non_mixing_classes,
-                branch_class=self.branch_class,
-                sample_rate=self.sample_rate,
                 max_sources=self.max_sources,
                 nb_of_seconds=self.nb_of_seconds,
                 nb_iteration = 3,
                 forceCPU=True,
                 return_spectrogram=self.return_spectrogram,
                 supervised=self.supervised,
-                isolated=self.isolated,
-            )
-        if stage == "test":
-            self.dataset_test_respeaker = self.test_dataset(
-                self.test_data_dir, 
-                self.frame_size, 
-                self.hop_size, 
-                target_class=self.target_class,
-                sample_rate=self.sample_rate,
-                max_sources=self.max_sources,
-                nb_of_seconds=self.nb_of_seconds,
-                supervised=self.supervised,
-                mic_array="respeaker",  
-                forceCPU=True, 
-                return_spectrogram=False,
-                nb_iteration = nb_of_test_iteration,
-            )
-            self.dataset_test_kinect = self.test_dataset(
-                self.test_data_dir, 
-                self.frame_size, 
-                self.hop_size, 
-                target_class=self.target_class,
-                sample_rate=self.sample_rate,
-                max_sources=self.max_sources,
-                nb_of_seconds=self.nb_of_seconds,  
-                supervised=self.supervised,
-                mic_array="kinect",   
-                forceCPU=True, 
-                return_spectrogram=False,
-                nb_iteration = nb_of_test_iteration,
-            )
-            self.dataset_test_16sounds = self.test_dataset(
-                self.test_data_dir, 
-                self.frame_size, 
-                self.hop_size, 
-                target_class=self.target_class,
-                sample_rate=self.sample_rate,
-                max_sources=self.max_sources,
-                nb_of_seconds=self.nb_of_seconds,
-                supervised=self.supervised,
-                mic_array="16sounds",     
-                forceCPU=True, 
-                return_spectrogram=False,
-                nb_iteration = nb_of_test_iteration,
-            )
-            self.dataset_test_fsd50k = self.dataset(
-                self.data_dir, 
-                self.frame_size, 
-                self.hop_size, 
-                type="test",
-                target_class=self.target_class,
-                non_mixing_classes=self.non_mixing_classes,
-                branch_class=self.branch_class,
-                sample_rate=self.sample_rate,
-                max_sources=self.max_sources,
-                nb_of_seconds=self.nb_of_seconds, 
-                forceCPU=True,
-                return_spectrogram=self.return_spectrogram,
-                supervised=self.supervised,
-                isolated=True,
-                nb_iteration = nb_of_test_iteration,
             )
 
     def train_dataloader(self):
@@ -202,37 +117,5 @@ class DataModule(pl.LightningDataModule):
             shuffle=False,
             persistent_workers=False,
         )
-    
-    def test_dataloader(self):
-        return [
-        DataLoader(
-            self.dataset_test_respeaker,
-            batch_size=self.batch_size,
-            num_workers=self.num_of_workers,
-            shuffle=False,
-            persistent_workers=False,
-        ),
-        DataLoader(
-            self.dataset_test_kinect,
-            batch_size=self.batch_size,
-            num_workers=self.num_of_workers,
-            shuffle=False,
-            persistent_workers=False,
-        ),
-        DataLoader(
-            self.dataset_test_16sounds,
-            batch_size=self.batch_size,
-            num_workers=self.num_of_workers,
-            shuffle=False,
-            persistent_workers=False,
-        ),
-        DataLoader(
-            self.dataset_test_fsd50k,
-            batch_size=self.batch_size,
-            num_workers=self.num_of_workers,
-            shuffle=False,
-            persistent_workers=False,
-        ),
-        ]
 
 

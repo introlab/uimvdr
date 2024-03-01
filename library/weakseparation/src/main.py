@@ -32,21 +32,6 @@ def main(args):
 
         config_path = os.path.join(run_path, "files/config.yaml")
 
-    speech_set = {"Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"}
-
-    if "Bark" in args.target_class:
-        args.branch_class = "Domestic animals, pets"
-        args.non_mixing_classes = ["Dog"]
-    elif not set(args.target_class).isdisjoint(speech_set) or "Speech" in args.target_class:
-        args.target_class = ["Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking"]
-        args.branch_class = "Human voice"
-        args.non_mixing_classes = ["Human voice"]
-    elif "Piano" in args.target_class:
-        args.branch_class = "Musical instrument"
-        args.non_mixing_classes = ["Keyboard (musical)"]
-    else:
-        print("Please make sure to define the branch class and non_mixing_classes argument as it is not a usual target class")
-
     if args.log:
         if args.ckpt_path is not None:
             logger = WandbLogger(project="mc-weak-separation", save_dir=args.log_path, config=config_path)
@@ -96,22 +81,11 @@ def main(args):
         save_last=True
     )
 
-    if audioset:
-        dataset_class = weakseparation.AudioSetDataset
-        dataset_path = os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset")
-    else:
-        dataset_class = weakseparation.FSD50KDataset
-        dataset_path= args.dataset_path
-
-    custom_dataset_path = os.path.join(args.dataset_path, "Custom", "separated")
+    data_path = os.path.join(args.dataset_path, "drone_dataset")
     dm = weakseparation.DataModule(
-        dataset_class,
-        dataset_path,
-        weakseparation.customDataset.CustomDataset,
-        custom_dataset_path,
-        target_class=target_class,
-        non_mixing_classes=non_mixing_classes,
-        branch_class=branch_class,
+        weakseparation.DroneAudioset.DroneAudioSetDataset,
+        data_path,
+        os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset"),
         frame_size=frame_size,
         hop_size=hop_size,
         sample_rate=sample_rate,
@@ -120,8 +94,7 @@ def main(args):
         batch_size=batch_size,
         num_of_workers=num_of_workers,
         return_spectrogram=return_spectrogram,
-        supervised=supervised,
-        isolated=isolated
+        supervised=supervised
     )
 
     model = weakseparation.ConvTasNet(
@@ -167,14 +140,14 @@ def main(args):
             print("Ending Testing")
 
     if args.example:
-        dm.setup("test")
+        dm.setup("val")
         paths = [
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/E/Speech/24.wav",
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/G/Bark/5.wav",
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/H/Church_bell/10.wav",
-            "/home/jacob/dev/weakseparation/library/dataset/Custom/separated/1002/16sounds/B/Thunder/7.wav",
+            "/home/jacob/Downloads/day2_test2_6m_1p_speech_p1_1_16kHz_MVDR_NULL_TausfloatRollAv100_RealTime_Norm.wav",
+            None,
+            None,
+            None,
         ]
-        mix, isolated_sources, labels = dm.dataset_test_16sounds.get_personalized_sample(paths)
+        mix, isolated_sources, labels = dm.dataset_val.get_personalized_sample(paths)
         if not args.resume_training and os.path.exists(ckpt_path):
             print(f"Logging example for {ckpt_path}")
             model = weakseparation.ConvTasNet.load_from_checkpoint(
