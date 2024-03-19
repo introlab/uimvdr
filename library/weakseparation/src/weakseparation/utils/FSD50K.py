@@ -308,7 +308,7 @@ class FSD50KDataset(Dataset):
         idxs_classes = [self.labels[self.paths_to_target_data[idx]]]
         for source_nb in range(self.max_sources-1):
             # Make sure that there is not nothing in the second mix
-            if random.random() >= -1 or \
+            if random.random() >= 0.5 or \
                ((not self.supervised or self.type=="test" or self.type=="val") and source_nb == int(self.max_sources //2)):
                 while True:
                     additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
