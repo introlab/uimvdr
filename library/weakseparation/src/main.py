@@ -66,6 +66,7 @@ def main(args):
     supervised = logger.experiment.config["supervised"]
     nb_of_seconds = logger.experiment.config["secs"]
     epochs = args.epochs
+    num_of_iteration_test = args.num_of_iteration_test
     learning_rate = logger.experiment.config["learning_rate"]
     batch_size = logger.experiment.config["batch_size"]
     num_of_workers = logger.experiment.config["num_of_workers"]
@@ -96,6 +97,7 @@ def main(args):
         save_last=True
     )
 
+    # audioset = False
     if audioset:
         dataset_class = weakseparation.AudioSetDataset
         dataset_path = os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset")
@@ -117,6 +119,7 @@ def main(args):
         sample_rate=sample_rate,
         max_sources=max_sources,
         nb_of_seconds=nb_of_seconds,
+        num_of_iteration_test=num_of_iteration_test,
         batch_size=batch_size,
         num_of_workers=num_of_workers,
         return_spectrogram=return_spectrogram,
@@ -342,6 +345,13 @@ if __name__ == "__main__":
         help="If true, will use Audioset else, will use FSD50K",
         action="store_true",
     )
+    parser.add_argument(
+        "--num_of_iteration_test",
+        type=int,
+        default=1,
+        help="Number of iterations on test dataset"
+    )
+
 
     args = parser.parse_args()
     main(args)

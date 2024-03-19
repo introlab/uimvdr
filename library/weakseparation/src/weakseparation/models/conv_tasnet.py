@@ -15,7 +15,8 @@ import torchaudio
 import pytorch_lightning as pl
 import wandb
 import numpy as np
-import random
+import pandas as pd
+import os
 
 from ..utils.Windows import cuda_sqrt_hann_window
 from ..utils.PlotUtils import plot_spectrogram_from_waveform
@@ -23,6 +24,36 @@ from torchmetrics.functional.audio import scale_invariant_signal_distortion_rati
 from torchmetrics.functional.audio.pesq import perceptual_evaluation_speech_quality
 from torchmetrics.functional.audio.stoi import short_time_objective_intelligibility
 from pytorch_lightning.loggers import WandbLogger
+from torchmetrics import Metric
+from torchmetrics.utilities.data import dim_zero_cat
+from datetime import datetime
+
+class SISDRCONF(Metric):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.add_state("data", default=[], dist_reduce_fx="cat")
+
+    def update(self, data: torch.Tensor) -> None:
+        self.data.append(data)
+
+    def compute(self, name=None):
+        # parse inputs
+        data = dim_zero_cat(self.data)
+
+        # Save to csv using pandas
+        if name is not None:
+            path = "/home/jacob/dev/weakseparation/logs/stats"
+            df = pd.DataFrame(data.cpu().numpy())
+            df.to_csv(os.path.join(path, f'{name}.csv'), index=False)
+
+        # Zalpha/2 is 1.96 for 95% interval
+        Zalphadiv2 = 1.96
+        n = data.shape[0]
+        mean = data.mean()
+        std = data.std()
+
+        interval = Zalphadiv2 * std / n**0.5
+        return mean, std, interval
 
 
 class ChannelWiseLayerNorm(nn.LayerNorm):
@@ -250,6 +281,13 @@ class ConvTasNet(pl.LightningModule):
             longterm_skip_lists += [nn.Conv1d(B, B, 1)]
         self.longterm_skip = nn.ModuleList(longterm_skip_lists)
 
+        self.target_si_sdri_conf = SISDRCONF(compute_on_step=False)
+        self.beam_target_si_sdri_conf = SISDRCONF(compute_on_step=False)
+
+        self.target_pesq_conf = SISDRCONF(compute_on_step=False)
+        self.beam_pesq_conf = SISDRCONF(compute_on_step=False)
+        self.target_stoi_conf = SISDRCONF(compute_on_step=False)
+        self.beam_stoi_conf = SISDRCONF(compute_on_step=False)
         # Beamforming
         self.scm_transform = torchaudio.transforms.PSD()
         self.mvdr_transform = torchaudio.transforms.SoudenMVDR()
@@ -582,9 +620,11 @@ class ConvTasNet(pl.LightningModule):
 
         isolated_pred, pred_mask = self(mix, return_pred_mask=True)
 
-        target_si_sdr = scale_invariant_signal_distortion_ratio(isolated_pred[:,0], isolated_sources[:,0]).mean()
-        mix_si_sdr = scale_invariant_signal_distortion_ratio(mix, isolated_sources[:,0]).mean()
+        target_si_sdr = scale_invariant_signal_distortion_ratio(isolated_pred[:,0], isolated_sources[:,0])
+        mix_si_sdr = scale_invariant_signal_distortion_ratio(mix, isolated_sources[:,0])
         target_si_sdri = target_si_sdr - mix_si_sdr
+        self.target_si_sdri_conf.update(target_si_sdri)
+        target_si_sdri = target_si_sdri.mean()
 
         stft_mix = self.encoder.encoder(multimic_mix)
         stft_target = self.encoder.encoder(multimic_isolated_sources[:,0])
@@ -595,15 +635,19 @@ class ConvTasNet(pl.LightningModule):
         oracle_pred = torch.nn.functional.pad(oracle_pred, (0, int(mix.shape[-1]-oracle_pred.shape[-1])), mode="constant", value=0)
 
         oracle_si_sdr = scale_invariant_signal_distortion_ratio(oracle_pred, isolated_sources[:,0]).mean()
-        oracle_si_sdri = oracle_si_sdr - mix_si_sdr
+        oracle_si_sdri = oracle_si_sdr - mix_si_sdr.mean()
 
         speech = self.trainer.datamodule.dataset_test_16sounds.target_class == "Speech"
         if speech:
             try:
-                pesq = perceptual_evaluation_speech_quality(isolated_pred[:,0], isolated_sources[:,0], 16000, 'wb').mean()
+                pesq = perceptual_evaluation_speech_quality(isolated_pred[:,0], isolated_sources[:,0], 16000, 'wb')
+                self.target_pesq_conf.update(pesq.to('cuda'))
+                pesq= pesq.mean()
             except:
                 pesq = None
-            stoi = short_time_objective_intelligibility(isolated_pred[:,0], isolated_sources[:,0], 16000, ).mean()
+            stoi = short_time_objective_intelligibility(isolated_pred[:,0], isolated_sources[:,0], 16000, )
+            self.target_stoi_conf.update(stoi.to('cuda'))
+            stoi = stoi.mean()
 
         if multimic_mix.shape[1] > 1:
             # Get Spectrograms
@@ -639,18 +683,24 @@ class ConvTasNet(pl.LightningModule):
             beamformed_oracle_target = torch.nn.functional.pad(beamformed_oracle_target, (0, int(mix.shape[-1]-beamformed_oracle_target.shape[-1])), mode="constant", value=0)
 
             # Compute metrics
-            beam_target_si_sdr = scale_invariant_signal_distortion_ratio(beamformed_pred, beamformed_target).mean()
+            beam_target_si_sdr = scale_invariant_signal_distortion_ratio(beamformed_pred, beamformed_target)
             beam_target_si_sdri = beam_target_si_sdr - mix_si_sdr
+            self.beam_target_si_sdri_conf.update(beam_target_si_sdri)
+            beam_target_si_sdri = beam_target_si_sdri.mean()
 
             beam_oracle_si_sdr = scale_invariant_signal_distortion_ratio(beamformed_oracle, beamformed_oracle_target).mean()
-            beam_oracle_si_sdri = beam_oracle_si_sdr - mix_si_sdr
+            beam_oracle_si_sdri = beam_oracle_si_sdr - mix_si_sdr.mean()
 
             if speech:
                 try:
-                    beam_pesq = perceptual_evaluation_speech_quality(beamformed_pred, beamformed_target, 16000, 'wb').mean()
+                    beam_pesq = perceptual_evaluation_speech_quality(beamformed_pred, beamformed_target, 16000, 'wb')
+                    self.beam_pesq_conf.update(beam_pesq.to('cuda'))
+                    beam_pesq = beam_pesq.mean()
                 except:
                     beam_pesq = None
-                beam_stoi = short_time_objective_intelligibility(beamformed_pred, beamformed_target, 16000).mean()
+                beam_stoi = short_time_objective_intelligibility(beamformed_pred, beamformed_target, 16000)
+                self.beam_stoi_conf.update(beam_stoi.to('cuda'))
+                beam_stoi = beam_stoi.mean()
         else:
             beam_target_si_sdri = 0.0
             beam_oracle_si_sdri = 0.0
@@ -684,6 +734,48 @@ class ConvTasNet(pl.LightningModule):
                         "test_beam_stoi" : beam_stoi,
                     })
 
+            if batch_idx == self.trainer.num_test_batches[dataloader_idx]-1:
+                current_datetime = datetime.now()
+                current_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")
+                name = f"SI-SDRI_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                _, _, conf = self.target_si_sdri_conf.compute(name)
+                if multimic_mix.shape[1] > 1:
+                    name = f"Beam_SI-SDRI_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                    _, _, beam_conf = self.beam_target_si_sdri_conf.compute(name)
+                else:
+                    beam_conf = 0.0
+                results.update({
+                    "test_target_si_sdri_conf" : conf,
+                    "test_beam_target_si_sdri_conf" : beam_conf,
+                })
+                self.target_si_sdri_conf.reset()
+                self.beam_target_si_sdri_conf.reset()
+
+                if speech:
+                    name = f"pesq_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                    _, _, pesq_conf = self.target_pesq_conf.compute(name)
+                    name = f"stoi_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                    _, _, stoi_conf = self.target_stoi_conf.compute(name)
+                    if multimic_mix.shape[1] > 1:
+                        name = f"Beam_pesq_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                        _, _, beam_pesq_conf = self.beam_pesq_conf.compute(name)
+                        name = f"Beam_stoi_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                        _, _, beam_stoi_conf = self.beam_stoi_conf.compute(name)
+                    else:
+                        beam_pesq_conf = 0.0
+                        beam_stoi_conf = 0.0
+                    results.update({
+                        "test_pesq_conf" : pesq_conf,
+                        "test_beam_pesq_conf" : beam_pesq_conf,
+                        "test_stoi_conf" : stoi_conf,
+                        "test_beam_stoi_conf" : beam_stoi_conf,
+                    })
+                    self.target_pesq_conf.reset()
+                    self.beam_pesq_conf.reset()
+                    self.target_stoi_conf.reset()
+                    self.beam_stoi_conf.reset()
+
+
             self.log_dict(results, batch_size=mix.shape[0], sync_dist=True)
         else:
             msi = self.compute_msi(isolated_pred, isolated_sources, mix, labels)
@@ -705,6 +797,49 @@ class ConvTasNet(pl.LightningModule):
                         "test_beam_stoi" : beam_stoi,
                     })
 
+            if batch_idx == self.trainer.num_test_batches[dataloader_idx]-1:
+                current_datetime = datetime.now()
+                current_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")
+                name = f"SI-SDRI_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                _, _, conf = self.target_si_sdri_conf.compute(name)
+                if multimic_mix.shape[1] > 1:
+                    name = f"Beam_SI-SDRI_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                    _, _, beam_conf = self.beam_target_si_sdri_conf.compute(name)
+                else:
+                    beam_conf = 0.0
+
+                results.update({
+                    "test_target_si_sdri_conf" : conf,
+                    "test_beam_target_si_sdri_conf" : beam_conf,
+                })
+
+                self.target_si_sdri_conf.reset()
+                self.beam_target_si_sdri_conf.reset()
+
+                if speech:
+                    name = f"pesq_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                    _, _, pesq_conf = self.target_pesq_conf.compute(name)
+                    name = f"stoi_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                    _, _, stoi_conf = self.target_stoi_conf.compute(name)
+                    if multimic_mix.shape[1] > 1:
+                        name = f"Beam_pesq_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                        _, _, beam_pesq_conf = self.beam_pesq_conf.compute(name)
+                        name = f"Beam_stoi_gamma_{self.gamma}_sup_{self.supervised}_datasetidx_{dataloader_idx}_{current_datetime}"
+                        _, _, beam_stoi_conf = self.beam_stoi_conf.compute(name)
+                    else:
+                        beam_pesq_conf = 0.0
+                        beam_stoi_conf = 0.0
+
+                    results.update({
+                        "test_target_pesq_conf" : pesq_conf,
+                        "test_beam_pesq_conf" : beam_pesq_conf,
+                        "test_target_stoi_conf" : stoi_conf,
+                        "test_beam_stoi_conf" : beam_stoi_conf,
+                    })
+                    self.target_pesq_conf.reset()
+                    self.target_stoi_conf.reset()
+                    self.beam_pesq_conf.reset()
+                    self.beam_stoi_conf.reset()
             self.log_dict(results, batch_size=mix.shape[0], sync_dist=True)
 
     def on_test_end(self):

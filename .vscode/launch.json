@@ -6,15 +6,15 @@
     "configurations": [
         {
             "name": "Python: Current File",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": false
         },
         {
             "name": "Main",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
@@ -23,11 +23,11 @@
         },
         {
             "name": "Test",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--example", "--predict","--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/9p3slnez"],
+            "args": ["--example", "--log", "--num_of_iteration_test", "10", "--predict","--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/oxf5w43t"],
             "justMyCode": false
         }
     ]

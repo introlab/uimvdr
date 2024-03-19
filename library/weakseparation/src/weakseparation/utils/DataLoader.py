@@ -42,6 +42,7 @@ class DataModule(pl.LightningDataModule):
                  max_sources=3, 
                  num_of_workers=4,
                  nb_of_seconds=5,
+                 num_of_iteration_test = 1,
                  return_spectrogram=True,
                  supervised=True,
                  isolated=False):
@@ -63,6 +64,7 @@ class DataModule(pl.LightningDataModule):
         self.supervised = supervised
         self.isolated = isolated
         self.nb_of_seconds=nb_of_seconds
+        self.num_of_iteration_test = num_of_iteration_test
 
     def setup(self, stage: str):
         """
@@ -71,7 +73,6 @@ class DataModule(pl.LightningDataModule):
             Args:
                 stage (str): fit, val or test
         """
-        nb_of_test_iteration = 10
         if stage == "fit":
             self.dataset_train = self.dataset(
                 self.data_dir,
@@ -137,7 +138,7 @@ class DataModule(pl.LightningDataModule):
                 mic_array="respeaker",  
                 forceCPU=True, 
                 return_spectrogram=False,
-                nb_iteration = nb_of_test_iteration,
+                nb_iteration = self.num_of_iteration_test,
             )
             self.dataset_test_kinect = self.test_dataset(
                 self.test_data_dir, 
@@ -151,7 +152,7 @@ class DataModule(pl.LightningDataModule):
                 mic_array="kinect",   
                 forceCPU=True, 
                 return_spectrogram=False,
-                nb_iteration = nb_of_test_iteration,
+                nb_iteration = self.num_of_iteration_test,
             )
             self.dataset_test_16sounds = self.test_dataset(
                 self.test_data_dir, 
@@ -165,8 +166,15 @@ class DataModule(pl.LightningDataModule):
                 mic_array="16sounds",     
                 forceCPU=True, 
                 return_spectrogram=False,
-                nb_iteration = nb_of_test_iteration,
+                nb_iteration = self.num_of_iteration_test,
             )
+            speech_set = {"Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking", "Speech"}
+
+            if set(self.target_class).isdisjoint(speech_set):
+                iteration = self.num_of_iteration_test*10
+            else:
+                iteration = self.num_of_iteration_test
+
             self.dataset_test_fsd50k = self.dataset(
                 self.data_dir, 
                 self.frame_size, 
@@ -182,7 +190,7 @@ class DataModule(pl.LightningDataModule):
                 return_spectrogram=self.return_spectrogram,
                 supervised=self.supervised,
                 isolated=True,
-                nb_iteration = nb_of_test_iteration,
+                nb_iteration = iteration,
             )
 
     def train_dataloader(self):

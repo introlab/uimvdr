@@ -114,7 +114,6 @@ class CustomDataset(Dataset):
         additionnal_idxs = []
         idxs_classes = [target_data.class_name]
         for source_nb in range(self.max_sources-1):
-            # TODO: set the probability to non-zero
             # Make sure that there is not nothing in the second mix
             if random.random() >= 0.5 or \
                (source_nb == int(self.max_sources //2)):
