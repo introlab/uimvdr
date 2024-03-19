@@ -180,7 +180,7 @@ class Decoder(nn.Module):
         return x
 
 
-class ConvTasNet(pl.LightningModule):
+class TDCNPP(pl.LightningModule):
     """
         TCDN++ adaptation of the ConvTasNet model
         Args:
@@ -215,7 +215,7 @@ class ConvTasNet(pl.LightningModule):
                  supervised=True,
                  learning_rate=1e-4
                  ):
-        super(ConvTasNet, self).__init__()
+        super(TDCNPP, self).__init__()
         # -----------------------model-----------------------
         self.encoder = Encoder(1, N, B, norm)
         self.separation = self._Sequential_repeat(
@@ -1100,6 +1100,6 @@ class ConvTasNet(pl.LightningModule):
         return optimizer
 
 if __name__ == "__main__":
-    conv = ConvTasNet()
+    conv = TDCNPP()
     a = torch.randn(4, 4096)
     s = conv(a)

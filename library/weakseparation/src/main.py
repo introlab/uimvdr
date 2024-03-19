@@ -124,7 +124,7 @@ def main(args):
         isolated=isolated
     )
 
-    model = weakseparation.ConvTasNet(
+    model = weakseparation.TDCNPP(
         N=frame_size, 
         activate="softmax", 
         num_spks=num_speakers, 
@@ -155,7 +155,7 @@ def main(args):
     if args.predict:
         if not args.resume_training and os.path.exists(ckpt_path):
             print(f"Starting Testing for {ckpt_path}")
-            model = weakseparation.ConvTasNet.load_from_checkpoint(
+            model = weakseparation.TDCNPP.load_from_checkpoint(
                 checkpoint_path=ckpt_path
             )
             trainer.test(model=model, datamodule=dm)
@@ -177,7 +177,7 @@ def main(args):
         mix, isolated_sources, labels = dm.dataset_test_16sounds.get_personalized_sample(paths)
         if not args.resume_training and os.path.exists(ckpt_path):
             print(f"Logging example for {ckpt_path}")
-            model = weakseparation.ConvTasNet.load_from_checkpoint(
+            model = weakseparation.TDCNPP.load_from_checkpoint(
                 checkpoint_path=ckpt_path,
             )
             model.to('cuda' if torch.cuda.is_available() else 'cpu')
