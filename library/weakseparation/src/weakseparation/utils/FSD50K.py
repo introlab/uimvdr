@@ -10,7 +10,7 @@ import numpy as np
 from .Windows import sqrt_hann_window
 # from Windows import sqrt_hann_window
 from torch.utils.data import Dataset
-from scipy import signal
+from speechbrain.processing.signal_processing import reverberate
 
 def make_index_dict(label_csv):
     index_lookup = {}
@@ -473,9 +473,10 @@ class FSD50KDataset(Dataset):
             source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
         """
         frames = len(source)
-        output = np.convolve(source.cpu().numpy(), rir.cpu().numpy())[:frames]
 
-        return torch.tensor(output)
+        output = reverberate(source[None, ...], torch.t(rir))[:frames]
+
+        return output.squeeze((0,1))
     
     @staticmethod
     def rms_normalize(x, augmentation=False):

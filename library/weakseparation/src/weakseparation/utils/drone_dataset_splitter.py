@@ -12,7 +12,7 @@ def get_files_paths(directory):
     return paths
 
 # Function to split files into train, validation, and test sets
-def split_files(file_paths, train_ratio=0.9, val_ratio=0.05, test_ratio=0.05):
+def split_files(file_paths, train_ratio=0.95, val_ratio=0.025, test_ratio=0.025):
     # Shuffle the list of file paths
     random.shuffle(file_paths)
     
@@ -31,7 +31,7 @@ def split_files(file_paths, train_ratio=0.9, val_ratio=0.05, test_ratio=0.05):
 
 if __name__ == "__main__":
     # Directory path containing files
-    directory = "/home/jacob/dev/weakseparation/library/dataset/unsupervised_offline_dataset"
+    directory = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/darit_audio"
     train_directory = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/train"
     val_dir = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/val"
     test_dir = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/test"

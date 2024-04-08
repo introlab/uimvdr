@@ -582,11 +582,20 @@ class ConvTasNet(pl.LightningModule):
 
         isolated_pred, pred_mask = self(mix, return_pred_mask=True)
 
+        
+        stft_mix = self.encoder.encoder(multimic_mix)
+        #New isolated/mask
+        pred_mask = 1-pred_mask
+        new_target = isolated_pred[..., 1:, :].sum(dim=1)
+        isolated_pred[..., 1, :] = isolated_pred[..., 0, :]
+        isolated_pred[..., 0, :] = new_target
+        
+
         target_si_sdr = scale_invariant_signal_distortion_ratio(isolated_pred[:,0], isolated_sources[:,0]).mean()
         mix_si_sdr = scale_invariant_signal_distortion_ratio(mix, isolated_sources[:,0]).mean()
         target_si_sdri = target_si_sdr - mix_si_sdr
 
-        stft_mix = self.encoder.encoder(multimic_mix)
+        
         stft_target = self.encoder.encoder(multimic_isolated_sources[:,0])
         oracle_mask = torch.abs(stft_target[:,0]) / (torch.abs(stft_target[:,0]) + torch.abs(stft_mix[:,0]-stft_target[:,0]) + self.epsilon)
         stft_oracle_pred = (stft_mix.transpose(0,1) * oracle_mask).transpose(0,1)
@@ -678,8 +687,8 @@ class ConvTasNet(pl.LightningModule):
             Log examples on test end
         """
         if isinstance(self.logger, WandbLogger):
-            mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_test_16sounds.get_serialized_sample(18, 1405)
-            mix1, isolated_sources1, labels1 = self.trainer.datamodule.dataset_test_16sounds.get_serialized_sample(10, 1300)
+            mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_test.get_serialized_sample(15, 59)
+            mix1, isolated_sources1, labels1 = self.trainer.datamodule.dataset_test.get_serialized_sample(10, 1300)
 
             multimic_mix = torch.stack((mix0, mix1))
             multimic_isolated_sources = torch.stack((isolated_sources0, isolated_sources1))
@@ -717,12 +726,15 @@ class ConvTasNet(pl.LightningModule):
                     oracle_mask = torch.abs(stft_target[:,0]) / (torch.abs(stft_target[:,0]) + torch.abs(stft_mix[:,0]-stft_target[:,0]) + self.epsilon)
                     stft_oracle_pred = (stft_mix.transpose(0,1) * oracle_mask).transpose(0,1)
 
-                    #New isolated/maks
-                    # pred_mask = 1-pred_mask
-                    isolated_pred[..., 0, :] = self.decoder.decoder(stft_mix[:, 0] * pred_mask, mix.shape[-1])
+                    #New isolated/mask
+                    pred_mask = 1-pred_mask
+                    new_target = isolated_pred[..., 1:, :].sum(dim=1)
+                    isolated_pred[..., 1, :] = isolated_pred[..., 0, :]
+                    isolated_pred[..., 0, :] = new_target
+        
 
-                    # multi_iso = self.decoder.decoder(stft_mix[0] * pred_mask[0], mix.shape[-1])
-                    # torchaudio.save("/home/jacob/Documents/Drone_examples_separated/tau_average.wav", multi_iso.cpu(), 16000)
+                    multi_iso = self.decoder.decoder(stft_mix[0] * pred_mask[0], mix.shape[-1])
+                    torchaudio.save("/home/jacob/dev/donne_francois_proulx/Sound_for_BF/speech_nn.wav", multi_iso.cpu(), 16000)
 
                     oracle_pred = self.decoder.decoder(stft_oracle_pred[:,0])
                     oracle_pred = torch.nn.functional.pad(oracle_pred, (0, int(mix.shape[-1]-oracle_pred.shape[-1])), mode="constant", value=0)
@@ -758,8 +770,7 @@ class ConvTasNet(pl.LightningModule):
                     beamformed_oracle_target = self.decoder.decoder(beamformed_oracle_target)
                     beamformed_oracle_target = torch.nn.functional.pad(beamformed_oracle_target, (0, int(mix.shape[-1]-beamformed_oracle_target.shape[-1])), mode="constant", value=0)
 
-                    # Do not have the clean sources so cannot recombine
-                    # isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
+                    isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
 
                     label = labels[0]
                     isolated_pred_logging = isolated_pred[0]
@@ -845,11 +856,10 @@ class ConvTasNet(pl.LightningModule):
 
         return
     
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
         """
             Log examples on validation end every 100 epochs
         """
-        outputs.clear()
 
         if not self.current_epoch % 100 and isinstance(self.logger, WandbLogger):
             mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(75, 350)
@@ -870,8 +880,9 @@ class ConvTasNet(pl.LightningModule):
                 isolated_sources, labels = self.prepare_data_for_supervised(isolated_sources, labels)
 
             isolated_pred = self(mix)
-                   
-            isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)
+
+            # Don't recombine    
+            # isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)
 
             label = labels[0]
             isolated_pred_logging = isolated_pred[0]

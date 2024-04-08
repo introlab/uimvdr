@@ -82,10 +82,24 @@ def main(args):
     )
 
     data_path = os.path.join(args.dataset_path, "drone_dataset")
+    # dm = weakseparation.DataModule(
+    #     weakseparation.DroneAudioset.DroneAudioSetDataset,
+    #     data_path,
+    #     os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset"),
+    #     frame_size=frame_size,
+    #     hop_size=hop_size,
+    #     sample_rate=sample_rate,
+    #     max_sources=max_sources,
+    #     nb_of_seconds=nb_of_seconds,
+    #     batch_size=batch_size,
+    #     num_of_workers=num_of_workers,
+    #     return_spectrogram=return_spectrogram,
+    #     supervised=supervised
+    # )
     dm = weakseparation.DataModule(
-        weakseparation.DroneAudioset.DroneAudioSetDataset,
+        weakseparation.DroneLibrispeech.DroneLibrispeechDataset,
         data_path,
-        os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset"),
+        args.dataset_path,
         frame_size=frame_size,
         hop_size=hop_size,
         sample_rate=sample_rate,
@@ -116,8 +130,7 @@ def main(args):
         callbacks=[checkpoint_callback],
         logger=logger,
         deterministic=True,
-        log_every_n_steps=5,
-        resume_from_checkpoint=ckpt_path if resume_training else None
+        log_every_n_steps=5
     )
 
     if args.train:
@@ -142,7 +155,7 @@ def main(args):
     if args.example:
         dm.setup("val")
         paths = [
-            "/home/jacob/Downloads/day2_test2_6m_1p_speech_p1_1_16kHz_MVDR_NULL_TausfloatRollAv100_RealTime_Norm.wav",
+            "/home/jacob/Documents/Drone_examples_separated/day2_test2_6m_1p_speech_1_2.wav",
             None,
             None,
             None,

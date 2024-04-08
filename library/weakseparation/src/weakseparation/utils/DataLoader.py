@@ -99,6 +99,20 @@ class DataModule(pl.LightningDataModule):
                 return_spectrogram=self.return_spectrogram,
                 supervised=self.supervised,
             )
+        if stage == "test":
+            self.dataset_test = self.dataset(
+                self.data_dir,
+                self.audioset_dir, 
+                self.frame_size, 
+                self.hop_size, 
+                type="test",
+                max_sources=self.max_sources,
+                nb_of_seconds=self.nb_of_seconds,
+                nb_iteration = 100,
+                forceCPU=True,
+                return_spectrogram=self.return_spectrogram,
+                supervised=self.supervised,
+            )
 
     def train_dataloader(self):
         return DataLoader(
@@ -112,6 +126,14 @@ class DataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(
             self.dataset_val,
+            batch_size=self.batch_size,
+            num_workers=self.num_of_workers,
+            shuffle=False,
+            persistent_workers=False,
+        )
+    def test_dataloader(self):
+        return DataLoader(
+            self.dataset_test,
             batch_size=self.batch_size,
             num_workers=self.num_of_workers,
             shuffle=False,

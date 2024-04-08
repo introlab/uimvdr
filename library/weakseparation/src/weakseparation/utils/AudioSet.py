@@ -9,7 +9,6 @@ import h5py
 from .Windows import sqrt_hann_window
 # from Windows import sqrt_hann_window
 from torch.utils.data import Dataset
-from scipy import signal
 
 def make_index_dict(label_csv):
     index_lookup = {}
@@ -418,26 +417,6 @@ class AudioSetDataset(Dataset):
                 x = x[..., :nb_of_samples]
 
         return x
-    
-    @staticmethod
-    def apply_rir(rirs, source):
-        """
-        Method to apply multichannel RIRs to a mono-signal.
-        
-        Args:
-            rirs (tensor): Multi-channel RIR,   shape = (channels, frames)
-            source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
-        """
-        channels = rirs.shape[0]
-        frames = len(source)
-        output = torch.empty((channels, frames))
-
-        for channel_index in range(channels):
-            output[channel_index] = torch.tensor(
-                signal.convolve(source.cpu().numpy(), rirs[channel_index].cpu().numpy())[:frames]
-            )
-
-        return output
 
     
     @staticmethod
