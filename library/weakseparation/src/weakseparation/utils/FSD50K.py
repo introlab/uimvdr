@@ -5,12 +5,11 @@ import torchaudio
 import torch
 import random
 import pandas
-import numpy as np
 
 from .Windows import sqrt_hann_window
 # from Windows import sqrt_hann_window
 from torch.utils.data import Dataset
-from scipy import signal
+from speechbrain.processing.signal_processing import reverberate
 
 def make_index_dict(label_csv):
     index_lookup = {}
@@ -178,10 +177,8 @@ class FSD50KDataset(Dataset):
             if self.speech:
                 if self.type == "train":
                     rir_folds = rir_folds = list(range(1,81))
-                elif self.type == "test":
-                    rir_folds = rir_folds = list(range(81,96))
                 elif self.type == "val":
-                    rir_folds = rir_folds = list(range(96,101))  
+                    rir_folds = rir_folds = list(range(81,96)) 
         else:
             if self.speech:
                 rir_folds = rir_folds = list(range(96,101))
@@ -473,9 +470,10 @@ class FSD50KDataset(Dataset):
             source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
         """
         frames = len(source)
-        output = np.convolve(source.cpu().numpy(), rir.cpu().numpy())[:frames]
 
-        return torch.tensor(output)
+        output = reverberate(source[None, ...], torch.t(rir))[:frames]
+
+        return output.squeeze((0,1))
     
     @staticmethod
     def rms_normalize(x, augmentation=False):

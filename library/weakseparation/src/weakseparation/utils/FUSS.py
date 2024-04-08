@@ -2,11 +2,9 @@ import os
 import torch
 import torchaudio
 import h5py
-import numpy as np
 import random
-import math
 
-from scipy import signal
+from speechbrain.processing.signal_processing import reverberate
 from torch.utils.data import Dataset
 # from .Windows import sqrt_hann_window
 
@@ -156,21 +154,20 @@ class FUSSDataset(Dataset):
         return augmentation_gain * normalize_gain * X
 
     @staticmethod
-    def apply_rir(rirs, source):
+    def apply_rir(rirs: torch.Tensor, source: torch.Tensor):
         """
         Method to apply multichannel RIRs to a mono-signal.
+        
         Args:
             rirs (tensor): Multi-channel RIR,   shape = (channels, frames)
             source (tensor): Mono-channel input signal to be reflected to multiple microphones (frames,)
         """
         channels = rirs.shape[0]
         frames = len(source)
-        output = torch.empty((channels, frames))
-
-        for channel_index in range(channels):
-            output[channel_index] = torch.tensor(
-                signal.convolve(source.cpu().numpy(), rirs[channel_index].cpu().numpy())[:frames]
-            )
+        output = source[..., None].repeat(1, channels)
+        rirs = torch.t(rirs)
+        output = reverberate(output[None, ...], rirs)[:frames]
+        output = output.squeeze(0).T
 
         return output
 
