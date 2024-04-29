@@ -430,12 +430,12 @@ class DroneAudioSetDataset(Dataset):
 
             Args:
                 x (Tensor): Data to normalize
-                augmentation (bool): Whether to normalize to 0 dB or a gain between -5 and 5 dB.
+                augmentation (bool): Whether to normalize to 0 dB or a gain between -10 and 10 dB.
         """
 
         if augmentation:
             # Gain between -10 and 10 dB
-            aug = torch.rand(1).item()*10 - 10
+            aug = torch.rand(1).item()*20 - 10
             augmentation_gain = 10 ** (aug/20)
         else:
             augmentation_gain = 1
