@@ -18,7 +18,7 @@
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--log", "--train", "--epochs", "10", "--secs", "5"],
+            "args": ["--train", "--secs", "10", "--target_class", "insect", "--sample_rate", "44100", "--batch_size", "8"],
             "justMyCode": false
         },
         {
@@ -27,7 +27,7 @@
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--predict", "--log", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/3q9zc38w"],
+            "args": ["--example", "--log", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/r2qycc6f"],
             "justMyCode": false
         }
     ]

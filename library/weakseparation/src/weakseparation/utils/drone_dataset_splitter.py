@@ -7,7 +7,8 @@ def get_files_paths(directory):
     paths = []
     for root, _, files in os.walk(directory):
         for filename in files:
-            paths.append(os.path.join(root, filename))
+            if filename[-4:] == ".wav":
+                paths.append(os.path.join(root, filename))
 
     return paths
 
@@ -19,29 +20,33 @@ def split_files(file_paths, train_ratio=0.95, val_ratio=0.025, test_ratio=0.025)
     # Calculate number of files for each set
     total_files = len(file_paths)
     num_train = int(total_files * train_ratio)
-    num_val = int(total_files * val_ratio)
-    num_test = int(total_files * test_ratio)
-    
-    # Split the file paths
     train_files = file_paths[:num_train]
-    val_files = file_paths[num_train:num_train + num_val]
-    test_files = file_paths[num_train + num_val:]
+    if val_ratio > 0:
+        num_val = int(total_files * val_ratio)
+        val_files = file_paths[num_train:num_train + num_val]
+    else:
+        val_files = []
+    if test_ratio > 0:
+        num_test = int(total_files * test_ratio)
+        test_files = file_paths[num_train + num_val:]
+    else:
+        test_files = []
     
     return train_files, val_files, test_files
 
 if __name__ == "__main__":
     # Directory path containing files
-    directory = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/darit_audio"
-    train_directory = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/train"
-    val_dir = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/val"
-    test_dir = "/home/jacob/dev/weakseparation/library/dataset/drone_dataset/test"
+    directory = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings/original"
+    train_directory = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings/train"
+    val_dir = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings//val"
+    test_dir = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings//test"
 
     
     # Get list of all file paths in the directory
     file_paths = get_files_paths(directory)
     
     # Split files into train, validation, and test sets
-    train_files, val_files, test_files = split_files(file_paths)
+    train_files, val_files, test_files = split_files(file_paths, train_ratio=1, val_ratio=0, test_ratio=0)
     
     # Print number of files in each set
     print("Number of files in training set:", len(train_files))

@@ -27,10 +27,10 @@ class DataModule(pl.LightningDataModule):
     def __init__(self, 
                  dataset,
                  data_dir,
-                 audioset_dir,
                  batch_size, 
                  frame_size, 
-                 hop_size, 
+                 hop_size,
+                 target_class = "drone", 
                  sample_rate=16000, 
                  max_sources=3, 
                  num_of_workers=4,
@@ -39,7 +39,6 @@ class DataModule(pl.LightningDataModule):
                  supervised=True):
         super().__init__()
         self.dataset = dataset
-        self.audioset_dir = audioset_dir
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_of_workers = num_of_workers
@@ -50,6 +49,7 @@ class DataModule(pl.LightningDataModule):
         self.return_spectrogram = return_spectrogram
         self.supervised = supervised
         self.nb_of_seconds=nb_of_seconds
+        self.target_class = target_class
 
     def setup(self, stage: str):
         """
@@ -61,9 +61,9 @@ class DataModule(pl.LightningDataModule):
         if stage == "fit":
             self.dataset_train = self.dataset(
                 self.data_dir,
-                self.audioset_dir,
                 self.frame_size,
                 self.hop_size,
+                target_class=self.target_class,
                 type="train",
                 sample_rate=self.sample_rate,
                 max_sources=self.max_sources,
@@ -73,10 +73,11 @@ class DataModule(pl.LightningDataModule):
                 supervised=self.supervised,
             )
             self.dataset_val = self.dataset(
-                self.data_dir,
-                self.audioset_dir, 
+                self.data_dir, 
                 self.frame_size, 
-                self.hop_size, 
+                self.hop_size,
+                target_class=self.target_class, 
+                sample_rate=self.sample_rate,
                 type="val",
                 max_sources=self.max_sources,
                 nb_of_seconds=self.nb_of_seconds,
@@ -88,9 +89,10 @@ class DataModule(pl.LightningDataModule):
         if stage == "val":
             self.dataset_val = self.dataset(
                 self.data_dir,
-                self.audioset_dir, 
                 self.frame_size, 
-                self.hop_size, 
+                self.hop_size,
+                target_class=self.target_class,
+                sample_rate=self.sample_rate, 
                 type="val",
                 max_sources=self.max_sources,
                 nb_of_seconds=self.nb_of_seconds,
@@ -102,9 +104,10 @@ class DataModule(pl.LightningDataModule):
         if stage == "test":
             self.dataset_test = self.dataset(
                 self.data_dir,
-                self.audioset_dir, 
                 self.frame_size, 
-                self.hop_size, 
+                self.hop_size,
+                target_class=self.target_class,
+                sample_rate=self.sample_rate, 
                 type="test",
                 max_sources=self.max_sources,
                 nb_of_seconds=self.nb_of_seconds,

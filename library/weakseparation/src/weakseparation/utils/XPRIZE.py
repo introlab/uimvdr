@@ -13,9 +13,9 @@ from torch.utils.data import Dataset
 from speechbrain.processing.signal_processing import reverberate
 
 
-class DroneLibrispeechDataset(Dataset):
+class XPRIZEDataset(Dataset):
     """
-        FSD50K Dataset. When the target is speech, the data comes from Librispeech
+        XPRIZE Dataset.
 
         Args:
             dir (str): Directory for test dataset
@@ -34,13 +34,12 @@ class DroneLibrispeechDataset(Dataset):
             isolated (bool): Whether the audio samples should be isolated or not (useful for supervision)
     """
     def __init__(self,
-                 drone_dataset_dir, 
                  dataset_dir,
                  frame_size, 
                  hop_size, 
-                 target_class="drone",
+                 target_class="insect",
                  type="train", 
-                 sample_rate=16000, 
+                 sample_rate=44100, 
                  max_sources=3, 
                  forceCPU=False, 
                  return_spectrogram=True, 
@@ -48,7 +47,6 @@ class DroneLibrispeechDataset(Dataset):
                  nb_iteration=1,
                  nb_of_seconds= 3) -> None:
         super().__init__()
-        self.drone_dataset_dir = drone_dataset_dir
         self.sample_rate = sample_rate
         self.max_sources = max_sources
         self.nb_of_seconds = nb_of_seconds
@@ -69,52 +67,22 @@ class DroneLibrispeechDataset(Dataset):
         self.paths_to_target_data = []
         self.labels = {}
 
-        if self.type == "train":
-            rir_folds = rir_folds = list(range(1,81))
-        elif self.type == "val":
-            rir_folds = rir_folds = list(range(81,96))
-        elif self.type == "test":
-            rir_folds = rir_folds = list(range(96,101))  
 
-        if self.type == "test":
-            drone_dir = os.path.join(drone_dataset_dir, self.type, "drone")
-            speech_dir = os.path.join(drone_dataset_dir, self.type, "speech")
-            for root, _, files in os.walk(drone_dir):
-                for filename in files:
-                    wav_path = os.path.join(root, filename)
-                    self.paths_to_data.append(wav_path)
-                    self.labels[wav_path] = ' '.join(target_class)
-            for root, _, files in os.walk(speech_dir):
-                for filename in files:
-                    wav_path = os.path.join(root, filename)
-                    self.paths_to_target_data.append(wav_path)
-                    self.labels[wav_path] = "Speech"
-        else:
-            drone_dir = os.path.join(drone_dataset_dir, self.type)
-            for root, _, files in os.walk(drone_dir):
-                for filename in files:
-                    wav_path = os.path.join(root, filename)
-                    self.paths_to_target_data.append(wav_path)
-                    self.labels[wav_path] = target_class
+        insect_dir = os.path.join(dataset_dir, "insect",  self.type)
+        bird_dir = os.path.join(dataset_dir, "bird", self.type)
 
-            root = os.path.join(dataset_dir, "Librispeech", self.type)
-            for path, subdirs, files in os.walk(root):
-                for name in files:
-                    if name[-5:] == ".flac":
-                        filename = os.path.join(path, name)
-                        self.paths_to_data.append(filename)
-                        self.labels[filename] = "Librispeech"
+        for root, _, files in os.walk(bird_dir):
+            for filename in files:
+                wav_path = os.path.join(root, filename)
+                self.paths_to_data.append(wav_path)
+                self.labels[wav_path] = "Bird"
+                
+        for root, _, files in os.walk(insect_dir):
+            for filename in files:
+                wav_path = os.path.join(root, filename)
+                self.paths_to_target_data.append(wav_path)
+                self.labels[wav_path] = ' '.join(target_class)         
 
-        self.path_to_rirs = os.path.join(dataset_dir, "Bird")
-        self._rirs = None
-        for fold in rir_folds:
-            rir_directory = os.path.join(self.path_to_rirs, 'fold%03u' % fold)
-            csv_file = os.path.join(rir_directory, 'fold%03u.csv' % fold)
-            df = pandas.read_csv(csv_file)
-            df.insert(0, 'fold', fold)
-            self._rirs = pandas.concat([self._rirs, df])
-
-        
         self.stft = torchaudio.transforms.Spectrogram(
             n_fft=frame_size,
             hop_length=hop_size,
@@ -188,10 +156,10 @@ class DroneLibrispeechDataset(Dataset):
                 additionnal_x = torch.zeros_like(mix)
             else:
                 additionnal_x, file_sample_rate = torchaudio.load(self.paths_to_data[index])
+                if self.type != "test":
+                    additionnal_x = additionnal_x[random.randint(0, additionnal_x.shape[0]-1)][None, ...]
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=True) 
-                if self.type != "test":            
-                    additionnal_x = self.apply_bird_rir(additionnal_x)  
                 additionnal_x = self.rms_normalize(additionnal_x, True)
 
                 mix += additionnal_x
@@ -238,7 +206,7 @@ class DroneLibrispeechDataset(Dataset):
         additionnal_idx = (idx*key) % len(self.paths_to_data)
         # HARDCODE 2 SOURCES FOR TESTING
         for source_nb in range(self.max_sources-1):
-            if source_nb == 0:
+            if source_nb == 1:
                 while True:
                     additionnal_idx += 1
                     additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]
@@ -257,10 +225,11 @@ class DroneLibrispeechDataset(Dataset):
                 additionnal_x = torch.zeros_like(additional_mix)
             else:
                 additionnal_x, file_sample_rate = torchaudio.load(self.paths_to_data[index])
+                # First channel
+                if self.type != "test":
+                    additionnal_x = additionnal_x[0][None, ...]
                 additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                 additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
-                if self.type != "test":    
-                    additionnal_x = self.apply_bird_rir(additionnal_x, index)
                 additionnal_x = self.rms_normalize(additionnal_x, False)
                 
                 mix += additionnal_x
@@ -356,24 +325,6 @@ class DroneLibrispeechDataset(Dataset):
 
         return x
     
-    def apply_bird_rir(self, x, idx = None):
-        mic_idx = random.randint(0, 7)
-
-        if idx is None:
-            rir_idx = random.randint(0, len(self._rirs)-1)
-        else:
-            rir_idx = idx % len(self._rirs)
-        item = self._rirs.iloc[rir_idx]
-        key = item['id']
-        fold = item['fold']
-
-        rir_path = os.path.join(self.path_to_rirs, 'fold%03u' % fold, key[0], key[1], key + ".flac")
-        rir, _ = torchaudio.load(rir_path)
-
-        x = self.apply_rir(rir[mic_idx], x[0])[None,:]
-        
-        return x
-    
     @staticmethod
     def apply_rir(rir, source):
         """
@@ -434,7 +385,7 @@ if __name__ == '__main__':
     non_mixing = ["Human voice"]
     # non_mixing = ["Dog"]
     branch_class = "Human voice"
-    dataset = DroneLibrispeechDataset(                           
+    dataset = XPRIZEDataset(                           
                             "/home/jacob/dev/weakseparation/library/dataset/drone_dataset",
                             "/home/jacob/dev/weakseparation/library/dataset",
                             frame_size, 

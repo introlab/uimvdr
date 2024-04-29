@@ -213,7 +213,8 @@ class ConvTasNet(pl.LightningModule):
                  num_spks=2,
                  activate="softmax",
                  supervised=True,
-                 learning_rate=1e-4
+                 learning_rate=1e-4,
+                 sample_rate = 16000
                  ):
         super(ConvTasNet, self).__init__()
         # -----------------------model-----------------------
@@ -242,6 +243,7 @@ class ConvTasNet(pl.LightningModule):
         self.gamma = gamma
         self.beta = beta
         self.kappa = kappa
+        self.sample_rate = sample_rate
         self.num_blocks = X
         self.index_of_last_skip = R*X - X
         nb_of_longterm_skip = int(self.index_of_last_skip/X)
@@ -625,8 +627,8 @@ class ConvTasNet(pl.LightningModule):
             beamformed_oracle_target = self.mvdr_transform(stft_target, scm_oracle, scm_oracle_noise, reference_channel=0)
 
             # Post mask
-            post_mask = pred_mask.clone()
-            post_mask[post_mask<0.3] = 0.3
+            # post_mask = pred_mask.clone()
+            # post_mask[post_mask<0.3] = 0.3
             beamformed_pred = beamformed_pred*pred_mask
 
             # Spectrogram -> Waveform
@@ -733,9 +735,6 @@ class ConvTasNet(pl.LightningModule):
                     isolated_pred[..., 0, :] = new_target
         
 
-                    multi_iso = self.decoder.decoder(stft_mix[0] * pred_mask[0], mix.shape[-1])
-                    torchaudio.save("/home/jacob/dev/donne_francois_proulx/Sound_for_BF/speech_nn.wav", multi_iso.cpu(), 16000)
-
                     oracle_pred = self.decoder.decoder(stft_oracle_pred[:,0])
                     oracle_pred = torch.nn.functional.pad(oracle_pred, (0, int(mix.shape[-1]-oracle_pred.shape[-1])), mode="constant", value=0)
                     # Get Spectrograms
@@ -756,8 +755,8 @@ class ConvTasNet(pl.LightningModule):
                     beamformed_oracle_target = self.mvdr_transform(stft_target, scm_oracle, scm_oracle_noise, reference_channel=0)
 
                     # Post mask
-                    post_mask = pred_mask.clone()
-                    post_mask[post_mask<0.3] = 0.3
+                    # post_mask = pred_mask.clone()
+                    # post_mask[post_mask<0.1] = 0.1
                     beamformed_pred = beamformed_pred*pred_mask
 
                     # Spectrogram -> Waveform
@@ -770,7 +769,7 @@ class ConvTasNet(pl.LightningModule):
                     beamformed_oracle_target = self.decoder.decoder(beamformed_oracle_target)
                     beamformed_oracle_target = torch.nn.functional.pad(beamformed_oracle_target, (0, int(mix.shape[-1]-beamformed_oracle_target.shape[-1])), mode="constant", value=0)
 
-                    isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
+                    # isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources, force_target=True)
 
                     label = labels[0]
                     isolated_pred_logging = isolated_pred[0]
@@ -794,43 +793,43 @@ class ConvTasNet(pl.LightningModule):
                             f"{label[0]}",
                             scale_invariant_signal_distortion_ratio(oracle_pred[None, ...], isolated_sources[0][None, ...]).mean() -
                                 scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
-                            wandb.Image(plot_spectrogram_from_waveform(oracle_pred[None, ...]+self.epsilon, 16000, title="Oracle prediction")),
-                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
-                            wandb.Audio(oracle_pred.cpu().numpy(), sample_rate=16000),
-                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                            wandb.Image(plot_spectrogram_from_waveform(oracle_pred[None, ...]+self.epsilon, self.sample_rate, title="Oracle prediction")),
+                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, self.sample_rate, title="target")),
+                            wandb.Audio(oracle_pred.cpu().numpy(), sample_rate=self.sample_rate),
+                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=self.sample_rate),
                         ])
                     table.append([
                             f"{label[0]}",
                             scale_invariant_signal_distortion_ratio(beam_oracle_pred[None, ...], beam_oracle_target[None, ...]).mean() -
                                 scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
-                            wandb.Image(plot_spectrogram_from_waveform(beam_oracle_pred[None, ...]+self.epsilon, 16000, title="Beamformed Oracle prediction")),
-                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
-                            wandb.Audio(beam_oracle_pred.cpu().numpy(), sample_rate=16000),
-                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                            wandb.Image(plot_spectrogram_from_waveform(beam_oracle_pred[None, ...]+self.epsilon, self.sample_rate, title="Beamformed Oracle prediction")),
+                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, self.sample_rate, title="target")),
+                            wandb.Audio(beam_oracle_pred.cpu().numpy(), sample_rate=self.sample_rate),
+                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=self.sample_rate),
                         ])
                     table.append([
                             f"{label[0]}",
                             scale_invariant_signal_distortion_ratio(beam_pred[None, ...], beamformed_target[None, ...]).mean() -
                                 scale_invariant_signal_distortion_ratio(mix[0][None, ...], isolated_sources[0][None, ...]).mean() ,
-                            wandb.Image(plot_spectrogram_from_waveform(beam_pred[None, ...]+self.epsilon, 16000, title="Beamformed prediction")),
-                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, 16000, title="target")),
-                            wandb.Audio(beam_pred.cpu().numpy(), sample_rate=16000),
-                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=16000),
+                            wandb.Image(plot_spectrogram_from_waveform(beam_pred[None, ...]+self.epsilon, self.sample_rate, title="Beamformed prediction")),
+                            wandb.Image(plot_spectrogram_from_waveform(isolated_sources[0][None, ...]+self.epsilon, self.sample_rate, title="target")),
+                            wandb.Audio(beam_pred.cpu().numpy(), sample_rate=self.sample_rate),
+                            wandb.Audio(isolated_sources[0].cpu().numpy(), sample_rate=self.sample_rate),
                         ])
                     for waveform_source, waveform_groundTruth in zip(isolated_pred_logging, isolated_sources):
                         table.append([
                             f"{label[i]}",
                             scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
                                 scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
-                            wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
-                            wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
-                            wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
-                            wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                            wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, self.sample_rate, title="prediction")),
+                            wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, self.sample_rate, title="target")),
+                            wandb.Audio(waveform_source.cpu().numpy(), sample_rate=self.sample_rate),
+                            wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=self.sample_rate),
                         ])
                         i+=1
                     logger.log_table(key="isolated results", columns=self.log_columns, data=table)
 
-                    wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=16000)})
+                    wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=self.sample_rate)})
 
                     if not self.supervised:
                         pred = self.efficient_mixit(isolated_pred, MoM)
@@ -845,10 +844,10 @@ class ConvTasNet(pl.LightningModule):
                                 f"{orig_label[i]}, {orig_label[i+1]}",
                                 scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
                                 scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
-                                wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
-                                wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
-                                wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
-                                wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                                wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, self.sample_rate, title="prediction")),
+                                wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, self.sample_rate, title="target")),
+                                wandb.Audio(waveform_source.cpu().numpy(), sample_rate=self.sample_rate),
+                                wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=self.sample_rate),
                             ])
                             i+=2
 
@@ -881,8 +880,7 @@ class ConvTasNet(pl.LightningModule):
 
             isolated_pred = self(mix)
 
-            # Don't recombine    
-            # isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)
+            isolated_pred = self.efficient_mixit(isolated_pred, isolated_sources)
 
             label = labels[0]
             isolated_pred_logging = isolated_pred[0]
@@ -895,15 +893,15 @@ class ConvTasNet(pl.LightningModule):
                     f"{label[i]}",
                     scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
                         scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
-                    wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
-                    wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
-                    wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
-                    wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                    wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, self.sample_rate, title="prediction")),
+                    wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, self.sample_rate, title="target")),
+                    wandb.Audio(waveform_source.cpu().numpy(), sample_rate=self.sample_rate),
+                    wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=self.sample_rate),
                 ])
                 i+=1
             self.logger.log_table(key="isolated results", columns=self.log_columns, data=table)
 
-            wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=16000)})
+            wandb.log({f"Mix": wandb.Audio(mix[0].cpu().numpy(), sample_rate=self.sample_rate)})
 
             if not self.supervised:
                 pred = self.efficient_mixit(isolated_pred, MoM)
@@ -918,10 +916,10 @@ class ConvTasNet(pl.LightningModule):
                         f"{orig_label[i]}, {orig_label[i+1]}",
                         scale_invariant_signal_distortion_ratio(waveform_source[None, ...], waveform_groundTruth[None, ...]).mean() -
                           scale_invariant_signal_distortion_ratio(mix[0][None, ...], waveform_groundTruth[None, ...]).mean() ,
-                        wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, 16000, title="prediction")),
-                        wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, 16000, title="target")),
-                        wandb.Audio(waveform_source.cpu().numpy(), sample_rate=16000),
-                        wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=16000),
+                        wandb.Image(plot_spectrogram_from_waveform(waveform_source[None, ...]+self.epsilon, self.sample_rate, title="prediction")),
+                        wandb.Image(plot_spectrogram_from_waveform(waveform_groundTruth[None, ...]+self.epsilon, self.sample_rate, title="target")),
+                        wandb.Audio(waveform_source.cpu().numpy(), sample_rate=self.sample_rate),
+                        wandb.Audio(waveform_groundTruth.cpu().numpy(), sample_rate=self.sample_rate),
                     ])
                     i+=2
 

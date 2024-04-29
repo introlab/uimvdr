@@ -122,7 +122,8 @@ class DroneAudioSetDataset(Dataset):
                  drone_dataset_dir, 
                  audioset_dir,
                  frame_size, 
-                 hop_size, 
+                 hop_size,
+                 target_class = "drone",
                  type="train", 
                  sample_rate=16000, 
                  max_sources=3, 
@@ -169,7 +170,7 @@ class DroneAudioSetDataset(Dataset):
             for filename in files:
                 wav_path = os.path.join(root, filename)
                 self.paths_to_target_data.append(wav_path)
-                self.labels[wav_path] = "Drone"
+                self.labels[wav_path] = ' '.join(target_class)
 
         with open(csv_path, mode='r') as json_file:
             data_dict = json.load(json_file)
@@ -251,7 +252,8 @@ class DroneAudioSetDataset(Dataset):
                     wav_path = os.path.join(self.audioset_dir, self.paths_to_data[index])
 
                 additionnal_x, file_sample_rate = torchaudio.load(wav_path)
-                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=True)
+                additionnal_x = self.get_right_number_of_samples(additionnal_x, file_sample_rate, self.nb_of_seconds, shuffle=True)
+                additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
                               
                 additionnal_x = self.rms_normalize(additionnal_x, True)
 
@@ -321,7 +323,8 @@ class DroneAudioSetDataset(Dataset):
             else:
                 wav_path = os.path.join(self.audioset_dir, self.paths_to_data[index]) 
                 additionnal_x, file_sample_rate = torchaudio.load(wav_path)
-                additionnal_x = self.get_right_number_of_samples(additionnal_x, self.sample_rate, self.nb_of_seconds, shuffle=False)
+                additionnal_x = self.get_right_number_of_samples(additionnal_x, file_sample_rate, self.nb_of_seconds, shuffle=False)
+                additionnal_x = torchaudio.functional.resample(additionnal_x, orig_freq=file_sample_rate, new_freq=self.sample_rate).to(self.device)
 
                 additionnal_x = self.rms_normalize(additionnal_x, False)
                 
@@ -435,7 +438,7 @@ class DroneAudioSetDataset(Dataset):
 
         if augmentation:
             # Gain between -10 and 10 dB
-            aug = torch.rand(1).item()*10 - 10
+            aug = torch.rand(1).item()*20 - 10
             augmentation_gain = 10 ** (aug/20)
         else:
             augmentation_gain = 1

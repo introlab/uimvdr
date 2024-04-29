@@ -81,11 +81,25 @@ def main(args):
         save_last=True
     )
 
-    data_path = os.path.join(args.dataset_path, "drone_dataset")
+    data_path = os.path.join(args.dataset_path, "XPRIZE")
+    dm = weakseparation.DataModule(
+        weakseparation.XPRIZE.XPRIZEDataset,
+        data_path,
+        frame_size=frame_size,
+        hop_size=hop_size,
+        target_class=target_class,
+        sample_rate=sample_rate,
+        max_sources=max_sources,
+        nb_of_seconds=nb_of_seconds,
+        batch_size=batch_size,
+        num_of_workers=num_of_workers,
+        return_spectrogram=return_spectrogram,
+        supervised=supervised
+    )
     # dm = weakseparation.DataModule(
-    #     weakseparation.DroneAudioset.DroneAudioSetDataset,
+    #     weakseparation.DroneLibrispeech.DroneLibrispeechDataset,
     #     data_path,
-    #     os.path.join(args.dataset_path, "/media/jacob/2fafdbfa-bd75-431c-abca-c664f105eef9/audioset"),
+    #     args.dataset_path,
     #     frame_size=frame_size,
     #     hop_size=hop_size,
     #     sample_rate=sample_rate,
@@ -96,20 +110,6 @@ def main(args):
     #     return_spectrogram=return_spectrogram,
     #     supervised=supervised
     # )
-    dm = weakseparation.DataModule(
-        weakseparation.DroneLibrispeech.DroneLibrispeechDataset,
-        data_path,
-        args.dataset_path,
-        frame_size=frame_size,
-        hop_size=hop_size,
-        sample_rate=sample_rate,
-        max_sources=max_sources,
-        nb_of_seconds=nb_of_seconds,
-        batch_size=batch_size,
-        num_of_workers=num_of_workers,
-        return_spectrogram=return_spectrogram,
-        supervised=supervised
-    )
 
     model = weakseparation.ConvTasNet(
         N=frame_size, 
@@ -119,7 +119,8 @@ def main(args):
         beta=beta,
         gamma=gamma,
         kappa=kappa,
-        learning_rate=learning_rate
+        learning_rate=learning_rate,
+        sample_rate=sample_rate
     )
     
     trainer = pl.Trainer(
@@ -155,7 +156,7 @@ def main(args):
     if args.example:
         dm.setup("val")
         paths = [
-            "/home/jacob/Documents/Drone_examples_separated/day2_test2_6m_1p_speech_1_2.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/insect/test/1706109087.wav",
             None,
             None,
             None,
