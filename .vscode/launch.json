@@ -27,7 +27,7 @@
             "request": "launch",
             "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--example", "--log", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/r2qycc6f"],
+            "args": ["--example", "--log", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/u0gebcxa"],
             "justMyCode": false
         }
     ]

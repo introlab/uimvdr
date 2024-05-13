@@ -45,8 +45,6 @@ def main(args):
         
     resume_training = args.resume_training
     target_class = logger.experiment.config["target_class"]
-    non_mixing_classes = logger.experiment.config["non_mixing_classes"]
-    branch_class = logger.experiment.config["branch_class"]
     sample_rate = logger.experiment.config["sample_rate"]
     supervised = logger.experiment.config["supervised"]
     nb_of_seconds = logger.experiment.config["secs"]
@@ -57,14 +55,10 @@ def main(args):
     beta = logger.experiment.config["beta"]
     gamma = logger.experiment.config["gamma"]
     kappa = logger.experiment.config["kappa"]
-    try:
-        audioset = logger.experiment.config["audioset"]
-    except:
-        audioset = False
     
     # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
     # batch_size = 1
-    isolated = True if supervised else False
+
     return_spectrogram = False
     seed = 17
     frame_size = 1024
@@ -96,20 +90,6 @@ def main(args):
         return_spectrogram=return_spectrogram,
         supervised=supervised
     )
-    # dm = weakseparation.DataModule(
-    #     weakseparation.DroneLibrispeech.DroneLibrispeechDataset,
-    #     data_path,
-    #     args.dataset_path,
-    #     frame_size=frame_size,
-    #     hop_size=hop_size,
-    #     sample_rate=sample_rate,
-    #     max_sources=max_sources,
-    #     nb_of_seconds=nb_of_seconds,
-    #     batch_size=batch_size,
-    #     num_of_workers=num_of_workers,
-    #     return_spectrogram=return_spectrogram,
-    #     supervised=supervised
-    # )
 
     model = weakseparation.ConvTasNet(
         N=frame_size, 
@@ -156,7 +136,7 @@ def main(args):
     if args.example:
         dm.setup("val")
         paths = [
-            "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/insect/test/1706109087.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/insect/train/1706105292.wav",
             None,
             None,
             None,
