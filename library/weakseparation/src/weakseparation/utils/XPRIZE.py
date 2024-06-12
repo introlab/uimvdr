@@ -137,8 +137,8 @@ class XPRIZEDataset(Dataset):
                     idxs_classes.append("Nothing") 
             else:
                 # Make sure that there is not nothing in the second mix
-                if random.random() >= -1 or \
-                ((not self.supervised or self.type=="test" or self.type=="val") and source_nb == int(self.max_sources //2)):
+                # TODO: REMOVE HARDCODE 2 SOURCES
+                if source_nb == int(self.max_sources //2):
                     while True:
                         additionnal_idx = random.randint(0, len(self.paths_to_data)-1)
                         additionnal_idx_class = self.labels[self.paths_to_data[additionnal_idx]]

@@ -860,8 +860,9 @@ class ConvTasNet(pl.LightningModule):
             Log examples on validation end every 100 epochs
         """
 
-        if not self.current_epoch % 100 and isinstance(self.logger, WandbLogger):
-            mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(75, 350)
+        if not self.current_epoch % 20 and isinstance(self.logger, WandbLogger):
+            # mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(17, 350)
+            mix0, isolated_sources0, labels0 = self.trainer.datamodule.dataset_val.get_serialized_sample(27, 350)
             mix1, isolated_sources1, labels1 = self.trainer.datamodule.dataset_val.get_serialized_sample(10, 200)
 
             mix = torch.stack((mix0, mix1)).to(self.device)

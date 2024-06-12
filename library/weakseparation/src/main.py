@@ -136,7 +136,7 @@ def main(args):
     if args.example:
         dm.setup("val")
         paths = [
-            "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/insect/train/1706105292.wav",
+            "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/insect/val/May-21-22_raft2_1716378451_1.wav",
             None,
             None,
             None,
