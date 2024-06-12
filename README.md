@@ -28,6 +28,7 @@ Send us your comments/suggestions to improve the project in ["Issues"](https://g
 ## Authors
 
 * Jacob Kealey (@JacobKealey)
+* John Hershey
 * François Grondin (@FrancoisGrondin)
 
 ## Licence
