@@ -2,6 +2,8 @@
 
 This is the repository for UIMVDR.
 
+Article accepted to INTERSPEECH 2024. Link to [arXiv](https://arxiv.org/abs/2406.06310) 
+
 ## Abstract
 
 Neural networks have recently become the dominant approach to sound separation. Their good performance relies on large datasets of isolated recordings. For speech and music, isolated single channel data are readily available; however, the same does not hold in the multi-channel case, and with most other sound classes. Multi-channel methods have the potential to outperform single channel approaches as they can exploit both spatial and spectral features, but the lack of training data remains a challenge. We propose unsupervised improved minimum variation distortionless response (UIMVDR), which enables multi-channel separation to leverage in-the-wild single-channel data through unsupervised training and beamforming. Results show that UIMVDR generalizes well and improves separation performance compared to supervised models, particularly in cases with limited supervised data. By using data available online, it also reduces the effort required to gather data for multi-channel approaches.
@@ -16,6 +18,9 @@ cd uimvdr
 # Install the dependencies
 pip install -r requirements.txt
 ```
+
+## Get the dataset
+Coming soon!
 
 ## Pretrained models
 
