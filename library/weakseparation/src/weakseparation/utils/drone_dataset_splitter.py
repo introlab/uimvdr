@@ -2,15 +2,13 @@ import os
 import random
 import shutil
 
+from glob import glob
+
 
 def get_files_paths(directory):
-    paths = []
-    for root, _, files in os.walk(directory):
-        for filename in files:
-            if filename[-4:] == ".wav":
-                paths.append(os.path.join(root, filename))
+    file_paths = glob(f"{directory}/**/*.wav", recursive=True)
 
-    return paths
+    return file_paths
 
 # Function to split files into train, validation, and test sets
 def split_files(file_paths, train_ratio=0.95, val_ratio=0.025, test_ratio=0.025):
@@ -36,28 +34,37 @@ def split_files(file_paths, train_ratio=0.95, val_ratio=0.025, test_ratio=0.025)
 
 if __name__ == "__main__":
     # Directory path containing files
-    directory = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings/original"
-    train_directory = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings/train"
-    val_dir = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings//val"
-    test_dir = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/wa_micro_recordings//test"
+    directory = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/Screaming-Piha"
+    train_directory = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/bird/train"
+    val_dir = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/bird/val"
+    test_dir = "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/bird/test"
 
     
     # Get list of all file paths in the directory
     file_paths = get_files_paths(directory)
     
     # Split files into train, validation, and test sets
-    train_files, val_files, test_files = split_files(file_paths, train_ratio=1, val_ratio=0, test_ratio=0)
+    train_files, val_files, test_files = split_files(file_paths, train_ratio=0.95, val_ratio=0.05, test_ratio=0)
     
     # Print number of files in each set
     print("Number of files in training set:", len(train_files))
     print("Number of files in validation set:", len(val_files))
     print("Number of files in test set:", len(test_files))
 
+    # for file in train_files:
+    #     shutil.copy(file, train_directory)
+
+    # for file in val_files:
+    #     shutil.copy(file, val_dir)
+
+    # for file in test_files:
+    #     shutil.copy(file, test_dir)
+
     for file in train_files:
-        shutil.copy(file, train_directory)
+        shutil.move(file, train_directory)
 
     for file in val_files:
-        shutil.copy(file, val_dir)
+        shutil.move(file, val_dir)
 
     for file in test_files:
-        shutil.copy(file, test_dir)
+        shutil.move(file, test_dir)
