@@ -16,7 +16,7 @@
             "name": "Main",
             "type": "debugpy",
             "request": "launch",
-            "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
+            "program": "/home/jacob/dev/uimvdr/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
             "args": ["--train", "--secs", "10", "--target_class", "insect", "--sample_rate", "44100", "--batch_size", "8"],
             "justMyCode": false
@@ -25,9 +25,9 @@
             "name": "Test",
             "type": "debugpy",
             "request": "launch",
-            "program": "/home/jacob/dev/weakseparation/library/weakseparation/src/main.py",
+            "program": "/home/jacob/dev/uimvdr/library/weakseparation/src/main.py",
             "console": "integratedTerminal",
-            "args": ["--example", "--log", "--ckpt_path", "/home/jacob/dev/weakseparation/logs/mc-weak-separation/u0gebcxa"],
+            "args": ["--example", "--log", "--ckpt_path", "/home/jacob/dev/uimvdr/logs/mc-weak-separation/0s9c4mrb"],
             "justMyCode": false
         }
     ]

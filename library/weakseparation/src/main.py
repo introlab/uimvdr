@@ -56,7 +56,7 @@ def main(args):
     gamma = logger.experiment.config["gamma"]
     kappa = logger.experiment.config["kappa"]
     
-    # logger = CSVLogger("/home/jacob/dev/weakseparation/logs")
+    # logger = CSVLogger("/home/jacob/dev/uimvdr/logs")
     # batch_size = 1
 
     return_spectrogram = False
@@ -136,7 +136,7 @@ def main(args):
     if args.example:
         dm.setup("val")
         paths = [
-            "/home/jacob/dev/weakseparation/library/dataset/XPRIZE/insect/train/1706105292.wav",
+            "/home/jacob/dev/XPRIZE/xprize-bioacoustic/1716460093.wav",
             None,
             None,
             None,
@@ -290,13 +290,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--log_path",
         type=str,
-        default="/home/jacob/dev/weakseparation/logs",
+        default="/home/jacob/dev/uimvdr/logs",
         help="Logging path",
     )
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default="/home/jacob/dev/weakseparation/library/dataset",
+        default="/home/jacob/dev/uimvdr/library/dataset",
         help="Logging path",
     )
     parser.add_argument(
