@@ -17,6 +17,10 @@ cd uimvdr
 pip install -r requirements.txt
 ```
 
+## Get the Multi-Channel Free Sound Test Dataset (MCFSTD)
+
+[Zenodo link](https://zenodo.org/records/10601318) 
+
 ## Pretrained models
 
 Get pretrained models on [Google Drive](https://drive.google.com/drive/folders/1ERosQmD0yiLmH5JYttGRuyTanNQvH3XI?usp=sharing)
